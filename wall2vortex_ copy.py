@@ -2,6 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
+from matplotlib.collections import LineCollection
 
 # ---------------------------
 # Simulation Parameters
@@ -12,15 +13,13 @@ dt = 0.1            # Time step
 num_steps = int(T/dt)
 delta = 0.1         # Mollification parameter (choose δ < 0.15 for the boundary layer)
 N = 10              # Number of sample paths per vortex
-num_vortices = 5    # Total number of vortices
+num_vortices = 10    # Total number of vortices
 
 h1 = 0.3
 Re = 0.0001/nu
 layer_thickness = np.sqrt(Re)
 h2_0 = layer_thickness * 0.3  # finer layer thickness
 h2 = h1 / (h1//h2_0)
-
-# h2 = h1/2
 
 print("boundary layer thickness:", layer_thickness)
 print("mesh grid:", h1, h2)
@@ -31,6 +30,42 @@ window_x = [x1 + x2 for x1, x2 in zip(region_x, [-0, 0])]
 window_y = [y1 + y2 for y1, y2 in zip(region_y, [-0, 0])]
 
 np.random.seed(42)
+
+# ---------------------------
+# Nonuniform Grid for Query Points (Finer near boundary x2=0)
+# ---------------------------
+def generate_nonuniform_grid_D(region_x=region_x, region_y=region_y, 
+                               layer_thickness=layer_thickness, h1=h1, h2=h2):
+    """
+    Generates a nonuniform grid in D, using a coarse grid in most of D
+    and a finer grid near the boundary (x2=0).
+    Returns:
+      grid: full set of query points (P x 2)
+      grid_coarse: points in the coarse region
+      grid_fine: points in the fine region
+    """
+    x1, x2 = region_x
+    y1, y2 = region_y
+    y3 = y2 - layer_thickness
+    num_x_coarse = int((x2 - x1) / h1) + 1
+    num_y_coarse = int((y3 - y1) / h1)
+    x_coarse = np.linspace(x1, x2, num_x_coarse)
+    y_coarse = np.linspace(y1, y3, num_y_coarse, endpoint=False)
+    xx_coarse, yy_coarse = np.meshgrid(x_coarse, y_coarse)
+    grid_coarse = np.column_stack((xx_coarse.ravel(), yy_coarse.ravel()))
+    
+    num_x_fine = int((x2 - x1) / h2) + 1
+    num_y_fine = int((y2 - y3) / h2) + 1
+    x_fine = np.linspace(x1, x2, num_x_fine)
+    y_fine = np.linspace(y3, y2, num_y_fine)
+    xx_fine, yy_fine = np.meshgrid(x_fine, y_fine)
+    grid_fine = np.column_stack((xx_fine.ravel(), yy_fine.ravel()))
+    
+    grid = np.concatenate((grid_coarse, grid_fine), axis=0)
+    print(f"Number of points in coarse grid: {len(grid_coarse)}")
+    print(f"Number of points in fine grid: {len(grid_fine)}")
+    print(f"Total number of points in the final grid: {len(grid)}")
+    return grid, grid_coarse, grid_fine
 
 # ---------------------------
 # Vortex Initialization in D (x2 < 0)
@@ -99,41 +134,7 @@ def simulate_vortex_trajectories():
         traj[step+1] = new
     return traj
 
-# ---------------------------
-# Nonuniform Grid for Query Points (Finer near boundary x2=0)
-# ---------------------------
-def generate_nonuniform_grid_D(region_x=region_x, region_y=region_y, 
-                               layer_thickness=layer_thickness, h1=h1, h2=h2):
-    """
-    Generates a nonuniform grid in D, using a coarse grid in most of D
-    and a finer grid near the boundary (x2=0).
-    Returns:
-      grid: full set of query points (P x 2)
-      grid_coarse: points in the coarse region
-      grid_fine: points in the fine region
-    """
-    x1, x2 = region_x
-    y1, y2 = region_y
-    y3 = y2 - layer_thickness
-    num_x_coarse = int((x2 - x1) / h1) + 1
-    num_y_coarse = int((y3 - y1) / h1)
-    x_coarse = np.linspace(x1, x2, num_x_coarse)
-    y_coarse = np.linspace(y1, y3, num_y_coarse, endpoint=False)
-    xx_coarse, yy_coarse = np.meshgrid(x_coarse, y_coarse)
-    grid_coarse = np.column_stack((xx_coarse.ravel(), yy_coarse.ravel()))
-    
-    num_x_fine = int((x2 - x1) / h2) + 1
-    num_y_fine = int((y2 - y3) / h2) + 1
-    x_fine = np.linspace(x1, x2, num_x_fine)
-    y_fine = np.linspace(y3, y2, num_y_fine)
-    xx_fine, yy_fine = np.meshgrid(x_fine, y_fine)
-    grid_fine = np.column_stack((xx_fine.ravel(), yy_fine.ravel()))
-    
-    grid = np.concatenate((grid_coarse, grid_fine), axis=0)
-    print(f"Number of points in coarse grid: {len(grid_coarse)}")
-    print(f"Number of points in fine grid: {len(grid_fine)}")
-    print(f"Total number of points in the final grid: {len(grid)}")
-    return grid, grid_coarse, grid_fine
+
 
 # ---------------------------
 # Boat Simulation on a Nonuniform Grid in D
@@ -146,12 +147,13 @@ def simulate_boats(vortex_traj):
     """
     Simulate boat trajectories on the nonuniform grid in D.
     Boats move according to the local velocity computed from the vortex simulation.
-    Instead of red arrows, we now create thin blue line segments whose length is proportional
-    to the velocity magnitude (appearing as dots when the velocity is very small).
+    Instead of red arrows, we now create thin blue line segments whose total length is
+    proportional to the local velocity. For a boat at position x with scaled velocity v,
+    we will later draw a line segment from x - 0.5*v to x + 0.5*v (centered at x).
     
     Returns:
       boat_positions: shape (num_steps+1, num_boats, 2)
-      boat_streams: shape (num_steps+1, num_boats, 2) -- these are the vectors used for plotting.
+      boat_streams: shape (num_steps+1, num_boats, 2) -- total segment vector.
     """
     boat_grid, _, _ = generate_boat_grid()
     num_boats = boat_grid.shape[0]
@@ -172,7 +174,6 @@ def simulate_boats(vortex_traj):
                     contrib2 = indicator_D(reflect(pos_i)) * K_delta(reflect(pos_i), pos, delta)
                     tmp += (contrib1 - contrib2)
                 vel += (tmp / N) * w0[i]
-            # For visualization, the stream segment is proportional to the local velocity.
             boat_streams[step, b] = arrow_scale * vel
             if step < num_steps:
                 boat_positions[step+1, b] = pos + dt * vel
@@ -226,36 +227,55 @@ ax.set_aspect('equal')
 ax.grid(True)
 ax.set_title("Vortex and Boat Animation (t=0.00)")
 
-# Initialize velocity field quiver using the full query_grid
+# Initialize velocity field quiver (50% transparent arrows)
 U, V = compute_velocity_field(trajectories[0], query_grid)
-vel_quiver = ax.quiver(query_grid[:, 0], query_grid[:, 1], U, V, color='black',
+vel_quiver = ax.quiver(query_grid[:, 0], query_grid[:, 1], U, V, color='black', alpha=0.9,
                        pivot='mid', scale=None, angles='xy', scale_units='xy')
 
-# Initialize boat quiver (blue line segments with no arrowheads)
+# ---------------------------
+# Boat visualization using LineCollection and scatter for tapered endpoints
+# ---------------------------
+# Compute initial boat segments:
+# For each boat, compute endpoints: [x - 0.5*v, x + 0.5*v]
 boats_init = boat_positions[0]
 streams_init = boat_streams[0]
-boat_quiver = ax.quiver(boats_init[:, 0], boats_init[:, 1],
-                        streams_init[:, 0], streams_init[:, 1],
-                        color='blue', pivot='tail', alpha=0.5,
-                        headlength=0, headwidth=0, headaxislength=0,
-                        width=0.002, scale=None, angles='xy', scale_units='xy')
+left_init = boats_init - 0.5 * streams_init
+right_init = boats_init + 0.5 * streams_init
+initial_segments = np.stack([left_init, right_init], axis=1)
 
-print("Animating......")
+# Create a LineCollection for the segments (blue lines)
+boat_lines = LineCollection(initial_segments, colors='blue', linewidths=2)
+ax.add_collection(boat_lines)
+
+# Create a scatter plot for the endpoints (to mimic tapered, sharper ends)
+all_endpoints_init = np.concatenate([left_init, right_init], axis=0)
+scat = ax.scatter(all_endpoints_init[:, 0], all_endpoints_init[:, 1],
+                  s=10, color='blue', zorder=3)
+
+# ---------------------------
+# Animation update function
+# ---------------------------
 def update(frame):
     t_current = frame * dt
     current_vortex = trajectories[frame]  # shape: (num_vortices, N, 2)
     U, V = compute_velocity_field(current_vortex, query_grid)
-    # Update the velocity field quiver without reshaping arrays
+    # Update the velocity field quiver
     vel_quiver.set_UVC(U, V)
     
-    # Update boat positions and stream segments
-    boats = boat_positions[frame]
-    streams = boat_streams[frame]
-    boat_quiver.set_offsets(boats)
-    boat_quiver.set_UVC(streams[:, 0], streams[:, 1])
+    # Update boat segments: compute endpoints for each boat.
+    current_boats = boat_positions[frame]
+    current_streams = boat_streams[frame]
+    left_endpoints = current_boats - 0.5 * current_streams
+    right_endpoints = current_boats + 0.5 * current_streams
+    segments = np.stack([left_endpoints, right_endpoints], axis=1)
+    boat_lines.set_segments(segments)
+    
+    # Update the scatter plot for endpoints (combine left and right endpoints)
+    all_endpoints = np.concatenate([left_endpoints, right_endpoints], axis=0)
+    scat.set_offsets(all_endpoints)
     
     ax.set_title(f"Vortex and Boat Animation (t={t_current:.2f})")
-    return vel_quiver, boat_quiver
+    return vel_quiver, boat_lines, scat
 
 anim = FuncAnimation(fig, update, frames=num_steps+1, interval=40, blit=False)
 
