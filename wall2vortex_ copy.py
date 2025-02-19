@@ -41,7 +41,7 @@ vortex_positions[:, 0] = np.random.uniform(region_x[0], region_x[1], num_vortice
 vortex_positions[:, 1] = np.random.uniform(region_y[0], region_y[1], num_vortices)
 
 # Vortex strengths (vorticity)
-w0 = np.random.uniform(-1, 1, num_vortices)
+w0 = np.random.uniform(-2, 2, num_vortices)
 # w0 = np.array([-1, 1])
 
 # ---------------------------
@@ -158,7 +158,7 @@ def simulate_boats(vortex_traj):
     boat_positions = np.zeros((num_steps+1, num_boats, 2))
     boat_streams = np.zeros((num_steps+1, num_boats, 2))
     boat_positions[0] = boat_grid
-    arrow_scale = 0.2  # scaling factor for visualization (adjust to change segment lengths)
+    arrow_scale = 0.05  # scaling factor for visualization (adjust to change segment lengths)
     for step in range(num_steps+1):
         current_vortex = vortex_traj[step]  # shape: (num_vortices, N, 2)
         for b in range(num_boats):
