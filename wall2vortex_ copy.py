@@ -8,17 +8,17 @@ from matplotlib.collections import LineCollection
 # Simulation Parameters
 # ---------------------------
 nu = 0.001          # Viscosity
-T = 40.0            # Final time (seconds)
+T = 10            # Final time (seconds)
 dt = 0.1            # Time step
 num_steps = int(T/dt)
 delta = 0.1         # Mollification parameter (choose δ < 0.15 for the boundary layer)
-N = 10              # Number of sample paths per vortex
-num_vortices = 10    # Total number of vortices
+N = 5              # Number of sample paths per vortex
+num_vortices = 41    # Total number of vortices
 
 h1 = 0.3
 Re = 0.0001/nu
 layer_thickness = np.sqrt(Re)
-h2_0 = layer_thickness * 0.3  # finer layer thickness
+h2_0 = layer_thickness * 0.2  # finer layer thickness
 h2 = h1 / (h1//h2_0)
 
 print("boundary layer thickness:", layer_thickness)
@@ -70,14 +70,22 @@ def generate_nonuniform_grid_D(region_x=region_x, region_y=region_y,
 # ---------------------------
 # Vortex Initialization in D (x2 < 0)
 # ---------------------------
-# Generate vortex positions with x1 in [-1,1] and x2 in [-1,0]
+# # Generate vortex positions with x1 in [-1,1] and x2 in [-1,0]
+# vortex_positions = np.zeros((num_vortices, 2))
+# vortex_positions[:, 0] = np.random.uniform(region_x[0], region_x[1], num_vortices)
+# vortex_positions[:, 1] = np.random.uniform(region_y[0], region_y[1], num_vortices)
+
+# # Vortex strengths (vorticity)
+# w0 = np.random.uniform(-2, 2, num_vortices)
+# # w0 = np.array([-1, 1])
+
+# Vortex Initialization in D (forcing y = -3 for all vortices)
 vortex_positions = np.zeros((num_vortices, 2))
 vortex_positions[:, 0] = np.random.uniform(region_x[0], region_x[1], num_vortices)
-vortex_positions[:, 1] = np.random.uniform(region_y[0], region_y[1], num_vortices)
+vortex_positions[:, 1] = -3  # Set all vortices to lie on y = -3
 
-# Vortex strengths (vorticity)
-w0 = np.random.uniform(-2, 2, num_vortices)
-# w0 = np.array([-1, 1])
+# Set all vortex strengths to 1
+w0 = np.ones(num_vortices)
 
 # ---------------------------
 # Mollified Biot-Savart Kernel
@@ -220,6 +228,7 @@ query_grid, grid_coarse, grid_fine = generate_nonuniform_grid_D()
 # ---------------------------
 # Animation: Combined Velocity Field and Boat Animation
 # ---------------------------
+print("Animating......")
 fig, ax = plt.subplots(figsize=(10, 8))
 ax.set_xlim(window_x[0], window_x[1])
 ax.set_ylim(window_y[0], window_y[1])  # Show a bit above the boundary
