@@ -6,7 +6,7 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 # ---------------------------
 # Simulation Parameters
 # ---------------------------
-nu = 0.15           # viscosity
+nu = 0.015          # viscosity
 T = 15              # final time (seconds)
 dt = 0.1            # time step
 num_steps = int(T / dt)
@@ -35,7 +35,7 @@ def generate_split_meshes():
     Generate five separate meshes:
       - D02: Coarse lower grid over [x1,x2] x [y1,y2) using spacing h0.
       - D01: Coarse upper grid: mirror of D02 (reflect y-coordinate).
-      - D0:  Boundary grid along y=0. Now generated using the fine mesh in x for higher density.
+      - D0:  Boundary grid along y=0, generated with the fine x-mesh for higher density.
       - Db2: Fine lower grid over [x1,x2] x [y2,0) using spacing h1 in x and h2 in y.
       - Db1: Fine upper grid: mirror of Db2.
     """
@@ -43,7 +43,7 @@ def generate_split_meshes():
 
     ## Coarse Meshes (using coarse spacing)
     N_x_coarse = int((x2 - x1) / h0) + 1
-    N_y_coarse = int((y2 - y1) / h0)  # number of vertical points in coarse lower half
+    N_y_coarse = int((y2 - y1) / h0)  # coarse vertical count
     x_coarse = np.linspace(x1, x2, N_x_coarse)
     y_coarse_lower = np.linspace(y1, y2, N_y_coarse, endpoint=False)
     XX_coarse, YY_coarse_lower = np.meshgrid(x_coarse, y_coarse_lower, indexing='ij')
@@ -53,14 +53,14 @@ def generate_split_meshes():
     D01 = D02.copy()
     D01[:, :, 1] = -D01[:, :, 1]
 
-    ## Boundary grid (D0) along y=0: use the fine x-mesh for higher density.
+    ## Boundary grid (D0) along y = 0: use the fine x-mesh for higher density.
     N_x_fine = int((x2 - x1) / h1) + 1
     x_fine = np.linspace(x1, x2, N_x_fine)
     D0 = np.stack((x_fine, np.zeros_like(x_fine)), axis=-1)
     D0 = D0[:, None, :]  # shape: (N_x_fine, 1, 2)
 
     ## Fine Meshes (using fine spacing)
-    N_y_fine = int((0 - y2) / h2)  # number of vertical points in fine lower half
+    N_y_fine = int((0 - y2) / h2)  # fine vertical count
     y_fine_lower = np.linspace(y2, 0, N_y_fine, endpoint=False)
     XX_fine, YY_fine_lower = np.meshgrid(x_fine, y_fine_lower, indexing='ij')
     Db2 = np.stack((XX_fine, YY_fine_lower), axis=-1)  # fine lower grid
@@ -73,10 +73,6 @@ def generate_split_meshes():
 
 # Generate the five meshes.
 D01, D02, D0, Db1, Db2 = generate_split_meshes()
-
-# Set counts for indexing.
-N_coarse = D02.shape[1]    # vertical count for coarse (D02 and D01)
-N_fine   = Db2.shape[1]    # vertical count for fine (Db2 and Db1)
 
 # ---------------------------
 # Vorticity and Velocity Functions
@@ -101,7 +97,7 @@ def initialize_vortices(grid):
 
 w0_D01 = initialize_vortices(D01)
 w0_D02 = initialize_vortices(D02)
-w0_D0  = initialize_vortices(D0)    # Dense boundary grid.
+w0_D0  = initialize_vortices(D0)    # boundary grid (dense in x)
 w0_Db1 = initialize_vortices(Db1)
 w0_Db2 = initialize_vortices(Db2)
 
@@ -109,7 +105,7 @@ w0_Db2 = initialize_vortices(Db2)
 # Helper Functions
 # ---------------------------
 def indicator_D(point):
-    """Return 1 if the point is in the physical (upper) domain (y > 0), else 0."""
+    """Return 1 if point is in the physical (upper) domain (y > 0), else 0."""
     return 1 if point[1] > 0 else 0
 
 def reflect(point):
@@ -123,7 +119,7 @@ def reflect_points(pts):
     return pts_ref
 
 # ---------------------------
-# Mollified Biot-Savart Kernel
+# Mollified Biot–Savart Kernel
 # ---------------------------
 def K_delta(x, y, delta=0.01):
     x1, x2 = x[0], x[1]
@@ -149,12 +145,11 @@ def make_u_func(curr_D01, curr_D02, curr_D0, curr_Db1, curr_Db2,
     """
     Build the local velocity function u(x). For x in the upper half-plane, the velocity is computed as
     \[
-      \hat{u}(x,t_{k+1}) = \sum_{(i_1,i_2)\in D,\;i_2>0} A_{i_1,i_2}\,\omega_{i_1,i_2}\left[1_D(X^{i_1,i_2})K(X^{i_1,i_2},x)
-      -1_D(X^{i_1,-i_2})K(X^{i_1,-i_2},x)\right].
+      \hat{u}(x,t_{k+1}) = \sum_{(i_1,i_2)\in D,\,i_2>0} A_{i_1,i_2}\,\omega_{i_1,i_2}\Bigl[K_\delta\bigl(X^{i_1,i_2},x\bigr) - K_\delta\bigl(X^{i_1,-i_2},x\bigr)\Bigr].
     \]
-    For x on the boundary (x[1] = 0) the velocity is zero, and for x in the lower half-plane, we define
+    For x on the boundary (\(x_2=0\)) the velocity is zero, and for x in the lower half-plane, we set
     \[
-      u(x,t) = \text{reflect}\Bigl(u(\text{reflect}(x),t)\Bigr).
+      u(x,t)=\text{reflect}\Bigl(u\bigl(\text{reflect}(x),t\bigr)\Bigr).
     \]
     """
     def compute_u(x):
@@ -177,7 +172,7 @@ def make_u_func(curr_D01, curr_D02, curr_D0, curr_Db1, curr_Db2,
                 term_upper = indicator_D(pos_upper) * K_delta(pos_upper, x, delta)
                 term_lower = indicator_D(pos_lower) * K_delta(pos_lower, x, delta)
                 u_val += A_fine * w_Db1[i, j] * (term_upper - term_lower)
-        # The boundary grid D0 contributes zero since indicator_D returns 0 at y = 0.
+        # D0 (boundary) contributes zero.
         return u_val
 
     def u_func(x):
@@ -193,7 +188,7 @@ def make_u_func(curr_D01, curr_D02, curr_D0, curr_Db1, curr_Db2,
     return u_func
 
 # ---------------------------
-# Vortex Trajectory Simulation (Euler–Maruyama) for All Meshes
+# Vortex Trajectory Simulation (Euler--Maruyama) for All Meshes
 # ---------------------------
 def simulate_vortex_trajectories():
     # Allocate arrays for trajectories.
@@ -239,11 +234,11 @@ def simulate_vortex_trajectories():
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_D02[step+1, i, j] = curr_D02[i, j] + dt * u_val + dW
 
-        # Update boundary grid (D0)
+        # Update boundary grid (D0) -- now updated with Brownian noise.
         M0, N0 = curr_D0.shape[0], curr_D0.shape[1]  # N0 is 1
         for i in range(M0):
             for j in range(N0):
-                u_val = u_func(curr_D0[i, j]) # this may be not 0
+                u_val = u_func(curr_D0[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_D0[step+1, i, j] = curr_D0[i, j] + dt * u_val + dW
 
@@ -264,98 +259,69 @@ def simulate_vortex_trajectories():
 
     return (traj_D01, traj_D02, traj_D0, traj_Db1, traj_Db2), uFuncs
 
-print("Simulating vortex trajectories...")
-(trajectories_D01, trajectories_D02, trajectories_D0,
- trajectories_Db1, trajectories_Db2), uFuncs = simulate_vortex_trajectories()
+if __name__ == '__main__':
+    print("Simulating vortex trajectories...")
+    (trajectories_D01, trajectories_D02, trajectories_D0,
+     trajectories_Db1, trajectories_Db2), uFuncs = simulate_vortex_trajectories()
 
-# ---------------------------
-# Boat Simulation: Use D0, D02, and Db2 (reflected) for physical points.
-# ---------------------------
-def generate_boat_grid():
-    """
-    For boat simulation, use points from:
-      - Boundary grid D0 (already on y=0),
-      - Coarse lower grid D02 reflected to the upper half-plane,
-      - Fine lower grid Db2 reflected to the upper half-plane.
-    """
-    boat_boundary = trajectories_D0[0].reshape(-1, 2)
-    boat_coarse = reflect_points(trajectories_D02[0].reshape(-1, 2))
-    boat_fine = reflect_points(trajectories_Db2[0].reshape(-1, 2))
-    boat_grid = np.concatenate((boat_boundary, boat_coarse, boat_fine), axis=0)
-    return boat_grid
+    # ---------------------------
+    # Animation of Vortex Trajectories
+    # ---------------------------
+    fig, ax = plt.subplots(figsize=(8, 8))
 
-def simulate_boats(uFuncs):
-    boat_grid = generate_boat_grid()
-    num_boats = boat_grid.shape[0]
-    boat_positions = np.zeros((num_steps+1, num_boats, 2))
-    boat_positions[0] = boat_grid
-    boat_displacements = np.zeros((num_steps, num_boats, 2))
+    # Initial scatter plots for each grid.
+    scat_D01 = ax.scatter(trajectories_D01[0].reshape(-1, 2)[:, 0],
+                          trajectories_D01[0].reshape(-1, 2)[:, 1],
+                          s=10, color='blue', label="D01 (upper coarse)")
+    scat_D02 = ax.scatter(trajectories_D02[0].reshape(-1, 2)[:, 0],
+                          trajectories_D02[0].reshape(-1, 2)[:, 1],
+                          s=10, color='red', label="D02 (lower coarse)")
+    scat_D0 = ax.scatter(trajectories_D0[0].reshape(-1, 2)[:, 0],
+                         trajectories_D0[0].reshape(-1, 2)[:, 1],
+                         s=10, color='green', label="D0 (boundary)")
+    scat_Db1 = ax.scatter(trajectories_Db1[0].reshape(-1, 2)[:, 0],
+                          trajectories_Db1[0].reshape(-1, 2)[:, 1],
+                          s=10, color='orange', label="Db1 (upper fine)")
+    scat_Db2 = ax.scatter(trajectories_Db2[0].reshape(-1, 2)[:, 0],
+                          trajectories_Db2[0].reshape(-1, 2)[:, 1],
+                          s=10, color='purple', label="Db2 (lower fine)")
+
+    # Set the plot limits and title.
+    ax.set_xlim(region_x[0] - 1, region_x[1] + 1)
+    ax.set_ylim(region_y[0] - 1, region_y[1] + 1)
+    ax.set_title("Vortex Trajectories at t = 0.00 s")
+    ax.legend()
+
+    def update(frame):
+        # Extract current positions from each grid and update scatter plots.
+        data_D01 = trajectories_D01[frame].reshape(-1, 2)
+        data_D02 = trajectories_D02[frame].reshape(-1, 2)
+        data_D0  = trajectories_D0[frame].reshape(-1, 2)
+        data_Db1 = trajectories_Db1[frame].reshape(-1, 2)
+        data_Db2 = trajectories_Db2[frame].reshape(-1, 2)
+        
+        scat_D01.set_offsets(data_D01)
+        scat_D02.set_offsets(data_D02)
+        scat_D0.set_offsets(data_D0)
+        scat_Db1.set_offsets(data_Db1)
+        scat_Db2.set_offsets(data_Db2)
+        
+        ax.set_title(f"Vortex Trajectories at t = {frame*dt:.2f} s")
+        return scat_D01, scat_D02, scat_D0, scat_Db1, scat_Db2
+
+    # Create the animation.
+    anim = FuncAnimation(fig, update, frames=num_steps+1, interval=50, blit=True)
+
+    # ---------------------------
+    # Save Animation as MP4 into the "animation" subfolder.
+    # ---------------------------
+    # Create subfolder "animation" if it doesn't exist.
+    os.makedirs("animation", exist_ok=True)
+    mp4_filename = os.path.join("animation", "vortex_points_traj.mp4")
     
-    for step in range(num_steps):
-        u_func = uFuncs[step]
-        for b in range(num_boats):
-            vel = u_func(boat_positions[step, b])
-            boat_displacements[step, b] = dt * vel
-            boat_positions[step+1, b] = boat_positions[step, b] + dt * vel
-    return boat_positions, boat_displacements
+    # Set up the writer. Here we use 20 fps.
+    writer = FFMpegWriter(fps=25, metadata=dict(artist='Your Name'), bitrate=1800)
+    anim.save(mp4_filename, writer=writer)
+    print(f"Animation saved as {mp4_filename}")
 
-print("Simulating boat trajectories...")
-boat_positions, boat_displacements = simulate_boats(uFuncs)
-
-# ---------------------------
-# Velocity Field Query
-# ---------------------------
-def compute_velocity_field(u_func, query_points):
-    P = query_points.shape[0]
-    U = np.zeros(P)
-    V = np.zeros(P)
-    for p in range(P):
-        vel = u_func(query_points[p])
-        U[p] = vel[0]
-        V[p] = vel[1]
-    return U, V
-
-def generate_query_grid():
-    # For visualization, use the boat grid.
-    return generate_boat_grid()
-
-query_grid = generate_query_grid()
-
-# ---------------------------
-# Animation: Velocity Field and Boat Trajectories
-# ---------------------------
-window_x = region_x
-window_y = [0, region_y[1]]  # show only the physical (upper) part: y>=0
-
-fig, ax = plt.subplots(figsize=(10, 8))
-ax.set_xlim(window_x[0], window_x[1])
-ax.set_ylim(window_y[0], window_y[1])
-ax.set_aspect('equal')
-ax.grid(True)
-ax.set_title("Vortex and Boat Animation (t=0.00)")
-
-U, V = compute_velocity_field(uFuncs[0], query_grid)
-vel_quiver = ax.quiver(query_grid[:, 0], query_grid[:, 1], U, V,
-                       color='black', alpha=0.9, pivot='mid',
-                       scale=None, angles='xy', scale_units='xy')
-
-boat_scatter = ax.scatter(boat_positions[0, :, 0], boat_positions[0, :, 1],
-                          s=10, color='blue', zorder=3)
-
-def update(frame):
-    t_current = frame * dt
-    u_func = uFuncs[frame] if frame < len(uFuncs) else uFuncs[-1]
-    U, V = compute_velocity_field(u_func, query_grid)
-    vel_quiver.set_UVC(U, V)
-    boat_scatter.set_offsets(boat_positions[frame])
-    ax.set_title(f"Vortex and Boat Animation (t={t_current:.2f})")
-    return vel_quiver, boat_scatter
-
-anim = FuncAnimation(fig, update, frames=num_steps+1, interval=40, blit=False)
-os.makedirs("animation", exist_ok=True)
-save_path = os.path.join("animation", "split_meshes.mp4")
-writer = FFMpegWriter(fps=25)
-anim.save(save_path, writer=writer)
-print(f"Animation saved at: {save_path}")
-
-plt.close(fig)
+    plt.show()
