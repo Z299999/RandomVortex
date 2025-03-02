@@ -6,18 +6,18 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 # ---------------------------
 # Simulation Parameters
 # ---------------------------
-nu = 0.15           # viscosity
+nu = 0.01           # viscosity
 T = 15              # final time (seconds)
 dt = 0.1            # time step
 num_steps = int(T / dt)
-delta = 0.1         # mollification parameter
+delta = 0.01         # mollification parameter
 
 # ---------------------------
 # Mesh Parameters
 # ---------------------------
 h0 = 1.0            # coarse grid spacing (for coarse meshes)
 h1 = 0.5            # fine grid spacing in x (for fine meshes)
-h2 = 0.1            # fine grid spacing in y (for fine lower half and boundary)
+h2 = 0.05            # fine grid spacing in y (for fine lower half and boundary)
 
 region_x = [-6, 6]
 region_y = [-6, 6]  # overall domain
@@ -25,7 +25,7 @@ region_y = [-6, 6]  # overall domain
 # For the coarse grid lower half, use y1 to y2 and then mirror about y=0.
 y1 = region_y[0]    # -6
 y4 = region_y[1]    # 6
-y2 = -0.5           # splitting point for the coarse grid lower half
+y2 = -0.2           # splitting point for the coarse grid lower half
 
 # ---------------------------
 # Grid Generation: Split Meshes
@@ -33,11 +33,11 @@ y2 = -0.5           # splitting point for the coarse grid lower half
 def generate_split_meshes():
     """
     Generate five separate meshes:
-      - D02: Coarse lower grid over [x1,x2] x [y1,y2) using spacing h0.
       - D01: Coarse upper grid: mirror of D02 (reflect y-coordinate).
+      - Db1: Fine upper grid: mirror of Db2.
       - D0:  Boundary grid along y=0. Now generated using the fine mesh in x for higher density.
       - Db2: Fine lower grid over [x1,x2] x [y2,0) using spacing h1 in x and h2 in y.
-      - Db1: Fine upper grid: mirror of Db2.
+      - D02: Coarse lower grid over [x1,x2] x [y1,y2) using spacing h0.
     """
     x1, x2 = region_x
 
@@ -53,7 +53,7 @@ def generate_split_meshes():
     D01 = D02.copy()
     D01[:, :, 1] = -D01[:, :, 1]
 
-    ## Boundary grid (D0) along y=0: use the fine x-mesh for higher density.
+    ## Boundary grid (D0) along y = 0: use the fine x-mesh for higher density.
     N_x_fine = int((x2 - x1) / h1) + 1
     x_fine = np.linspace(x1, x2, N_x_fine)
     D0 = np.stack((x_fine, np.zeros_like(x_fine)), axis=-1)
@@ -78,18 +78,12 @@ D01, D02, D0, Db1, Db2 = generate_split_meshes()
 N_coarse = D02.shape[1]    # vertical count for coarse (D02 and D01)
 N_fine   = Db2.shape[1]    # vertical count for fine (Db2 and Db1)
 
-# ---------------------------
-# Vorticity and Velocity Functions
-# ---------------------------
 def velocity(x, y):
     return np.array([-np.sin(y), 0])
 
 def vorticity(x, y):
     return np.cos(y)
 
-# ---------------------------
-# Vortex Initialization for Each Mesh
-# ---------------------------
 def initialize_vortices(grid):
     M, N, _ = grid.shape
     w = np.zeros((M, N))
@@ -117,7 +111,7 @@ def reflect(point):
     return np.array([point[0], -point[1]])
 
 def reflect_points(pts):
-    """Reflect an array of points of shape (N, 2) by flipping the y-coordinate."""
+    """Reflect an array of points of shape (N,2) by flipping the y-coordinate."""
     pts_ref = pts.copy()
     pts_ref[:, 1] = -pts_ref[:, 1]
     return pts_ref
@@ -149,35 +143,36 @@ def make_u_func(curr_D01, curr_D02, curr_D0, curr_Db1, curr_Db2,
     """
     Build the local velocity function u(x). For x in the upper half-plane, the velocity is computed as
     \[
-      \hat{u}(x,t_{k+1}) = \sum_{(i_1,i_2)\in D,\;i_2>0} A_{i_1,i_2}\,\omega_{i_1,i_2}\left[1_D(X^{i_1,i_2})K(X^{i_1,i_2},x)
-      -1_D(X^{i_1,-i_2})K(X^{i_1,-i_2},x)\right].
+      \hat{u}(x,t_{k+1}) = \sum_{(i_1,i_2)\in D,\;i_2>0} A_{i_1,i_2}\,\omega_{i_1,i_2}\Bigl[K_\delta\bigl(X^{i_1,i_2},x\bigr)-K_\delta\bigl(X^{i_1,-i_2},x\bigr)\Bigr].
     \]
-    For x on the boundary (x[1] = 0) the velocity is zero, and for x in the lower half-plane, we define
+    For x on the boundary (x[1]=0) the velocity is zero, and for x in the lower half-plane, we define
     \[
-      u(x,t) = \text{reflect}\Bigl(u(\text{reflect}(x),t)\Bigr).
+      u(x,t)=\text{reflect}\Bigl(u\bigl(\text{reflect}(x),t\bigr)\Bigr).
     \]
     """
     def compute_u(x):
         u_val = np.zeros(2)
         # Coarse contribution:
-        M_coarse, N_coarse_local = curr_D01.shape[0], curr_D01.shape[1]
+        M_coarse, N_coarse_local = curr_D02.shape[0], curr_D02.shape[1]
         for i in range(M_coarse):
             for j in range(N_coarse_local):
-                pos_upper = curr_D01[i, j]
-                pos_lower = curr_D02[i, j]
+                pos_upper = curr_D02[i, j]
+                pos_lower = reflect(pos_upper) # cheating
+                # pos_lower = curr_D01[i, j]
                 term_upper = indicator_D(pos_upper) * K_delta(pos_upper, x, delta)
                 term_lower = indicator_D(pos_lower) * K_delta(pos_lower, x, delta)
                 u_val += A_coarse * w_D01[i, j] * (term_upper - term_lower)
         # Fine contribution:
-        M_fine, N_fine_local = curr_Db1.shape[0], curr_Db1.shape[1]
+        M_fine, N_fine_local = curr_Db2.shape[0], curr_Db2.shape[1]
         for i in range(M_fine):
             for j in range(N_fine_local):
-                pos_upper = curr_Db1[i, j]
-                pos_lower = curr_Db2[i, j]
+                pos_upper = curr_Db2[i, j]
+                pos_lower = reflect(pos_upper) # cheating
+                # pos_lower = curr_Db1[i, j]
                 term_upper = indicator_D(pos_upper) * K_delta(pos_upper, x, delta)
                 term_lower = indicator_D(pos_lower) * K_delta(pos_lower, x, delta)
                 u_val += A_fine * w_Db1[i, j] * (term_upper - term_lower)
-        # The boundary grid D0 contributes zero since indicator_D returns 0 at y = 0.
+        # The boundary grid D0 contributes zero (since indicator_D is zero at y=0).
         return u_val
 
     def u_func(x):
@@ -197,40 +192,35 @@ def make_u_func(curr_D01, curr_D02, curr_D0, curr_Db1, curr_Db2,
 # ---------------------------
 def simulate_vortex_trajectories():
     # Allocate arrays for trajectories.
-    traj_D01 = np.zeros((num_steps+1,) + D01.shape)
     traj_D02 = np.zeros((num_steps+1,) + D02.shape)
+    traj_Db2 = np.zeros((num_steps+1,) + Db2.shape)
     traj_D0  = np.zeros((num_steps+1,) + D0.shape)
     traj_Db1 = np.zeros((num_steps+1,) + Db1.shape)
-    traj_Db2 = np.zeros((num_steps+1,) + Db2.shape)
+    traj_D01 = np.zeros((num_steps+1,) + D01.shape)
     
     # Set initial conditions.
-    traj_D01[0] = D01
     traj_D02[0] = D02
+    traj_Db2[0] = Db2
     traj_D0[0]  = D0
     traj_Db1[0] = Db1
-    traj_Db2[0] = Db2
+    traj_D01[0] = D01
 
     uFuncs = []
     
     for step in range(num_steps):
-        curr_D01 = traj_D01[step].copy()
         curr_D02 = traj_D02[step].copy()
+        curr_Db2 = traj_Db2[step].copy()
         curr_D0  = traj_D0[step].copy()
         curr_Db1 = traj_Db1[step].copy()
-        curr_Db2 = traj_Db2[step].copy()
+        curr_D01 = traj_D01[step].copy()
         
         u_func = make_u_func(curr_D01, curr_D02, curr_D0, curr_Db1, curr_Db2,
                              w0_D01, w0_D02, w0_D0, w0_Db1, w0_Db2,
                              A_coarse, A_fine, delta)
         uFuncs.append(u_func)
         
-        # Update coarse upper grid (D01)
+        M_f, N_f = curr_Db1.shape[0], curr_Db1.shape[1]
         M, N = curr_D01.shape[0], curr_D01.shape[1]
-        for i in range(M):
-            for j in range(N):
-                u_val = u_func(curr_D01[i, j])
-                dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
-                traj_D01[step+1, i, j] = curr_D01[i, j] + dt * u_val + dW
 
         # Update coarse lower grid (D02)
         for i in range(M):
@@ -239,28 +229,38 @@ def simulate_vortex_trajectories():
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_D02[step+1, i, j] = curr_D02[i, j] + dt * u_val + dW
 
-        # Update boundary grid (D0)
-        M0, N0 = curr_D0.shape[0], curr_D0.shape[1]  # N0 is 1
-        for i in range(M0):
-            for j in range(N0):
-                u_val = u_func(curr_D0[i, j]) # this may be not 0
-                dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
-                traj_D0[step+1, i, j] = curr_D0[i, j] + dt * u_val + dW
-
-        # Update fine upper grid (Db1)
-        M_f, N_f = curr_Db1.shape[0], curr_Db1.shape[1]
-        for i in range(M_f):
-            for j in range(N_f):
-                u_val = u_func(curr_Db1[i, j])
-                dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
-                traj_Db1[step+1, i, j] = curr_Db1[i, j] + dt * u_val + dW
-
         # Update fine lower grid (Db2)
         for i in range(M_f):
             for j in range(N_f):
                 u_val = u_func(curr_Db2[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_Db2[step+1, i, j] = curr_Db2[i, j] + dt * u_val + dW
+
+        # Update boundary grid (D0)
+        M0, N0 = curr_D0.shape[0], curr_D0.shape[1]  # N0 is 1
+        for i in range(M0):
+            for j in range(N0):
+                u_val = u_func(curr_D0[i, j])
+                dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
+                traj_D0[step+1, i, j] = curr_D0[i, j] + dt * u_val + dW
+
+        # # Update fine upper grid (Db1)
+        # 
+        # for i in range(M_f):
+        #     for j in range(N_f):
+        #         u_val = u_func(curr_Db1[i, j])
+        #         dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
+        #         traj_Db1[step+1, i, j] = curr_Db1[i, j] + dt * u_val + dW
+        
+        # # Update coarse upper grid (D01)
+        # 
+        # for i in range(M):
+        #     for j in range(N):
+        #         u_val = u_func(curr_D01[i, j])
+        #         dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
+        #         traj_D01[step+1, i, j] = curr_D01[i, j] + dt * u_val + dW
+
+        
 
     return (traj_D01, traj_D02, traj_D0, traj_Db1, traj_Db2), uFuncs
 
@@ -269,41 +269,41 @@ print("Simulating vortex trajectories...")
  trajectories_Db1, trajectories_Db2), uFuncs = simulate_vortex_trajectories()
 
 # ---------------------------
-# Boat Simulation: Use D0, D02, and Db2 (reflected) for physical points.
+# Boat Simulation: Update Boats Using u_func
 # ---------------------------
-def generate_boat_grid():
+def generate_initial_boat_grid():
     """
-    For boat simulation, use points from:
-      - Boundary grid D0 (already on y=0),
-      - Coarse lower grid D02 reflected to the upper half-plane,
-      - Fine lower grid Db2 reflected to the upper half-plane.
+    For boat simulation, initially use points from:
+      - The boundary grid D0 (which is at y=0),
+      - The coarse lower grid D02 reflected to the upper half-plane,
+      - The fine lower grid Db2 reflected to the upper half-plane.
     """
-    boat_boundary = trajectories_D0[0].reshape(-1, 2)
-    boat_coarse = reflect_points(trajectories_D02[0].reshape(-1, 2))
-    boat_fine = reflect_points(trajectories_Db2[0].reshape(-1, 2))
+    boat_boundary = D0.reshape(-1, 2)
+    boat_coarse = reflect_points(D02.reshape(-1, 2))
+    boat_fine = reflect_points(Db2.reshape(-1, 2))
     boat_grid = np.concatenate((boat_boundary, boat_coarse, boat_fine), axis=0)
     return boat_grid
 
 def simulate_boats(uFuncs):
-    boat_grid = generate_boat_grid()
+    boat_positions = []
+    boat_grid = generate_initial_boat_grid()
+    boat_positions.append(boat_grid)
     num_boats = boat_grid.shape[0]
-    boat_positions = np.zeros((num_steps+1, num_boats, 2))
-    boat_positions[0] = boat_grid
-    boat_displacements = np.zeros((num_steps, num_boats, 2))
-    
     for step in range(num_steps):
         u_func = uFuncs[step]
+        new_positions = np.zeros_like(boat_grid)
         for b in range(num_boats):
-            vel = u_func(boat_positions[step, b])
-            boat_displacements[step, b] = dt * vel
-            boat_positions[step+1, b] = boat_positions[step, b] + dt * vel
-    return boat_positions, boat_displacements
+            vel = u_func(boat_grid[b])
+            new_positions[b] = boat_grid[b] + dt * vel
+        boat_grid = new_positions
+        boat_positions.append(boat_grid)
+    return np.array(boat_positions)
 
 print("Simulating boat trajectories...")
-boat_positions, boat_displacements = simulate_boats(uFuncs)
+boat_positions = simulate_boats(uFuncs)
 
 # ---------------------------
-# Velocity Field Query
+# Velocity Field Query for Visualization
 # ---------------------------
 def compute_velocity_field(u_func, query_points):
     P = query_points.shape[0]
@@ -316,8 +316,8 @@ def compute_velocity_field(u_func, query_points):
     return U, V
 
 def generate_query_grid():
-    # For visualization, use the boat grid.
-    return generate_boat_grid()
+    # For visualization, use the initial boat grid.
+    return generate_initial_boat_grid()
 
 query_grid = generate_query_grid()
 
@@ -339,7 +339,7 @@ vel_quiver = ax.quiver(query_grid[:, 0], query_grid[:, 1], U, V,
                        color='black', alpha=0.9, pivot='mid',
                        scale=None, angles='xy', scale_units='xy')
 
-boat_scatter = ax.scatter(boat_positions[0, :, 0], boat_positions[0, :, 1],
+boat_scatter = ax.scatter(boat_positions[0][:, 0], boat_positions[0][:, 1],
                           s=10, color='blue', zorder=3)
 
 def update(frame):

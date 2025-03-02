@@ -37,7 +37,7 @@ def velocity(x, y):
     return np.array([-np.sin(y), 0])
 
 def vorticity(x, y):
-    return -2 * np.cos(y)
+    return -np.cos(y)
 
 def generate_nonuniform_grid_D():
     """
