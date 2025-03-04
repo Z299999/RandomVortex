@@ -7,12 +7,15 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 # ---------------------------
 # Simulation Parameters
 # ---------------------------
-nu = 0.015          # Viscosity
+nu = 0.01           # Viscosity
 T = 15              # Final time (seconds)
 dt = 0.1            # Time step (also used in viscosity term as h)
 num_steps = int(T / dt)
 delta = 0.1         # Mollification parameter (for kernel)
-eps_bl = 0.01       # New constant for boundary layer (ε_bl)
+eps_bl = 0.1       # New constant for boundary layer (ε_bl)
+
+VIS = False # viscosity
+EXT = False # external force
 
 # Mesh parameters:
 h0 = 1.0    # Coarse mesh grid spacing (Do)
@@ -42,14 +45,14 @@ def vorticity(x, y):
 
 def generate_nonuniform_grid_D():
     """
-    Generates a nonuniform grid in D with a coarse grid covering y in [y3, y2] 
+    Generates a nonuniform grid in D with a coarse grid covering y in [y3, y2]
     and a fine grid covering y in [y1, y3), where y3 is the layer_thickness.
     Returns a dictionary with keys 'coarse' (Do) and 'fine' (Db), where each value is a tuple (grid, A).
     """
     x1, x2 = region_x
     y1_, y2_ = region_y
     y3 = layer_thickness  # dividing line in y
-    
+
     # Coarse grid (Do): y in [y3, y2] with spacing h0
     num_x_coarse = int((x2 - x1) / h0) + 1
     num_y_coarse = int((y2_ - y3) / h0) + 1
@@ -58,7 +61,7 @@ def generate_nonuniform_grid_D():
     xx_coarse, yy_coarse = np.meshgrid(x_coarse, y_coarse, indexing='ij')
     grid_coarse = np.stack((xx_coarse, yy_coarse), axis=-1)
     A_coarse = h0 * h0 * np.ones((num_x_coarse, num_y_coarse))
-    
+
     # Fine grid (Db): y in [y1, y3) with spacing h1 (x) and h2 (y)
     num_x_fine = int((x2 - x1) / h1) + 1
     num_y_fine = int((y3 - y1_) / h2) + 1
@@ -67,10 +70,10 @@ def generate_nonuniform_grid_D():
     xx_fine, yy_fine = np.meshgrid(x_fine, y_fine, indexing='ij')
     grid_fine = np.stack((xx_fine, yy_fine), axis=-1)
     A_fine = h1 * h2 * np.ones((num_x_fine, num_y_fine))
-    
+
     print(f"Coarse grid shape: {grid_coarse.shape}, points: {grid_coarse.size//2}")
     print(f"Fine grid shape: {grid_fine.shape}, points: {grid_fine.size//2}")
-    
+
     return {'coarse': (grid_coarse, A_coarse), 'fine': (grid_fine, A_fine)}
 
 # Generate grids
@@ -134,9 +137,9 @@ def phi_dd_func(r):
 # External Force Function G
 # ---------------------------
 def G_func(x, t):
-    # External force's curl; here we include it in the algorithm.
-    # For gravity F=(0,-g), curl F=0, but we retain the term.
-    return 0.0  # placeholder; can be nonzero in other applications
+    # External force's curl; for gravity F=(0,-g), curl F=0,
+    # but we include the term in the algorithm.
+    return 0.0  # placeholder; modify if a nonzero external force is desired
 
 # ---------------------------
 # Gamma update for fine grid (Db)
@@ -186,32 +189,35 @@ def make_u_func_X(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_
                 contrib2 = indicator_D(pos_ref) * K_delta(pos_ref, x, delta)
                 u_val += (contrib1 - contrib2) * w0_fine[i, j] * A_fine[i, j]
         # External force contribution (both grids)
-        # Coarse grid external force (Do): no gamma check (always in D)
-        for i in range(n1):
-            for j in range(n2):
-                pos = current_X_coarse[i, j]
-                ext_sum = 0.0
-                for l in range(k_index + 1):
-                    ext_sum += G_func(pos, time_array[l])
-                u_val += A_coarse[i, j] * dt * K_delta(pos, x, delta) * ext_sum
-        # Fine grid external force (Db): with gamma check
-        for i in range(n1f):
-            for j in range(n2f):
-                pos = current_X_fine[i, j]
-                ext_sum = 0.0
-                for l in range(k_index + 1):
-                    if time_array[l] > gamma_fine[i, j]:
+        if EXT:
+            # Coarse grid external force (Do): no gamma check (always in D)
+            for i in range(n1):
+                for j in range(n2):
+                    pos = current_X_coarse[i, j]
+                    ext_sum = 0.0
+                    for l in range(k_index + 1):
                         ext_sum += G_func(pos, time_array[l])
-                u_val += A_fine[i, j] * dt * K_delta(pos, x, delta) * ext_sum
-        # Fine contribution (Db) - Viscosity term
-        for i in range(n1f):
-            for j in range(n2f):
-                inner_sum = 0.0
-                for l in range(k_index + 1):
-                    if time_array[l] > gamma_fine[i, j]:
-                        pos_l = traj_X_fine_history[l][i, j]
-                        inner_sum += theta_func(pos_l[0], time_array[l]) * phi_dd_func(pos_l[1] / eps_bl)
-                u_val += (nu / (eps_bl**2)) * h1 * h2 * dt * K_delta(current_X_fine[i, j], x, delta) * inner_sum
+                    u_val += A_coarse[i, j] * dt * K_delta(pos, x, delta) * ext_sum
+            # Fine grid external force (Db): with gamma check
+            for i in range(n1f):
+                for j in range(n2f):
+                    pos = current_X_fine[i, j]
+                    ext_sum = 0.0
+                    for l in range(k_index + 1):
+                        if time_array[l] > gamma_fine[i, j]:
+                            ext_sum += G_func(pos, time_array[l])
+                    u_val += A_fine[i, j] * dt * K_delta(pos, x, delta) * ext_sum
+
+        if VIS:
+            # Fine contribution (Db) - Viscosity term
+            for i in range(n1f):
+                for j in range(n2f):
+                    inner_sum = 0.0
+                    for l in range(k_index + 1):
+                        if time_array[l] > gamma_fine[i, j]:
+                            pos_l = traj_X_fine_history[l][i, j]
+                            inner_sum += theta_func(pos_l[0], time_array[l]) * phi_dd_func(pos_l[1] / eps_bl)
+                    u_val += (nu / (eps_bl**2)) * h1 * h2 * dt * K_delta(current_X_fine[i, j], x, delta) * inner_sum
         return u_val
 
     def u_func_X(x):
@@ -256,32 +262,34 @@ def make_u_func_Y(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_
                 contrib2 = indicator_D(pos_ref) * K_delta(pos_ref, x, delta)
                 u_val += (contrib1 - contrib2) * w0_fine[i, j] * A_fine[i, j]
         # External force contribution (both grids)
-        # Coarse grid external force (Do)
-        for i in range(n1):
-            for j in range(n2):
-                pos = current_Y_coarse[i, j]
-                ext_sum = 0.0
-                for l in range(k_index + 1):
-                    ext_sum += G_func(pos, time_array[l])
-                u_val += A_coarse[i, j] * dt * K_delta(pos, x, delta) * ext_sum
-        # Fine grid external force (Db)
-        for i in range(n1f):
-            for j in range(n2f):
-                pos = current_Y_fine[i, j]
-                ext_sum = 0.0
-                for l in range(k_index + 1):
-                    if time_array[l] > gamma_fine[i, j]:
+        if EXT:
+            # Coarse grid external force (Do)
+            for i in range(n1):
+                for j in range(n2):
+                    pos = current_Y_coarse[i, j]
+                    ext_sum = 0.0
+                    for l in range(k_index + 1):
                         ext_sum += G_func(pos, time_array[l])
-                u_val += A_fine[i, j] * dt * K_delta(pos, x, delta) * ext_sum
+                    u_val += A_coarse[i, j] * dt * K_delta(pos, x, delta) * ext_sum
+            # Fine grid external force (Db)
+            for i in range(n1f):
+                for j in range(n2f):
+                    pos = current_Y_fine[i, j]
+                    ext_sum = 0.0
+                    for l in range(k_index + 1):
+                        if time_array[l] > gamma_fine[i, j]:
+                            ext_sum += G_func(pos, time_array[l])
+                    u_val += A_fine[i, j] * dt * K_delta(pos, x, delta) * ext_sum
         # Fine contribution (Db) - Viscosity term
-        for i in range(n1f):
-            for j in range(n2f):
-                inner_sum = 0.0
-                for l in range(k_index + 1):
-                    if time_array[l] > gamma_fine[i, j]:
-                        pos_l = traj_Y_fine_history[l][i, j]
-                        inner_sum += theta_func(pos_l[0], time_array[l]) * phi_dd_func(pos_l[1] / eps_bl)
-                u_val += (nu / (eps_bl**2)) * h1 * h2 * dt * K_delta(current_Y_fine[i, j], x, delta) * inner_sum
+        if VIS:
+            for i in range(n1f):
+                for j in range(n2f):
+                    inner_sum = 0.0
+                    for l in range(k_index + 1):
+                        if time_array[l] > gamma_fine[i, j]:
+                            pos_l = traj_Y_fine_history[l][i, j]
+                            inner_sum += theta_func(pos_l[0], time_array[l]) * phi_dd_func(pos_l[1] / eps_bl)
+                    u_val += (nu / (eps_bl**2)) * h1 * h2 * dt * K_delta(current_Y_fine[i, j], x, delta) * inner_sum
         return u_val
 
     def u_func_Y(x):
@@ -364,10 +372,12 @@ def simulate_vortex_trajectories_XY():
     start_boat_time = time.time()
     
     def generate_boat_grid():
+        # Only use coarse (Do) and fine (Db) from X trajectories
         boat_grid = np.concatenate((grid_coarse.reshape(-1,2), grid_fine.reshape(-1,2)), axis=0)
         return boat_grid
 
     def simulate_boats(uFuncs):
+        # Simulate only X boats (passive tracers)
         boat_grid = generate_boat_grid()
         num_boats = boat_grid.shape[0]
         boat_positions = np.zeros((num_steps+1, num_boats, 2))
@@ -383,16 +393,14 @@ def simulate_vortex_trajectories_XY():
 
     print("Simulating boat trajectories for X (using uFuncs_X)...")
     boat_positions_X = simulate_boats(uFuncs_X)
-    print("Simulating boat trajectories for Y (using uFuncs_Y)...")
-    boat_positions_Y = simulate_boats(uFuncs_Y)
     
     total_boat_time = time.time() - start_boat_time
     print(f"Boat simulation time: {total_boat_time:.2f} seconds")
     
-    return (traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y, boat_positions_X, boat_positions_Y
+    return (traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y, boat_positions_X
 
 print("Simulating vortex trajectories for X and Y ...")
-(traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y, boat_positions_X, boat_positions_Y = simulate_vortex_trajectories_XY()
+(traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y, boat_positions_X = simulate_vortex_trajectories_XY()
 
 # ---------------------------
 # Velocity Field Query for Visualization
@@ -413,7 +421,7 @@ def generate_query_grid():
 query_grid = generate_query_grid()
 
 # ---------------------------
-# Animation: Combined Velocity Field and Boat Animation for X and Y
+# Animation: Combined Velocity Field and Boat Animation for X
 # ---------------------------
 fig, ax = plt.subplots(figsize=(10,8))
 ax.set_xlim(window_x[0], window_x[1])
@@ -429,6 +437,8 @@ vel_quiver = ax.quiver(query_grid[:,0], query_grid[:,1], U, V,
 boat_scatter = ax.scatter(boat_positions_X[0][:,0], boat_positions_X[0][:,1],
                           s=10, color='blue', zorder=3)
 
+start_anim_time = time.time()
+
 def update(frame):
     t_current = frame * dt
     u_func = uFuncs_X[frame] if frame < len(uFuncs_X) else uFuncs_X[-1]
@@ -443,6 +453,8 @@ os.makedirs("animation", exist_ok=True)
 save_path = os.path.join("animation", "vortex_XY_vis_ext.mp4")
 writer = FFMpegWriter(fps=25)
 anim.save(save_path, writer=writer)
+total_anim_time = time.time() - start_anim_time
+print(f"Animation computation time: {total_anim_time:.2f} seconds")
 print(f"Animation saved at: {save_path}")
 
 plt.close(fig)
