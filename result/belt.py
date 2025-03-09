@@ -14,7 +14,7 @@ num_steps = int(T / dt)
 delta = 0.1        # Mollification parameter
 
 # Domain parameters:
-H = 4              # Adjustable domain height
+H = 6              # Adjustable domain height
 region_x = [-6, 6]
 region_y = [0, H]
 window_x = [region_x[0], region_x[1]]
@@ -23,7 +23,7 @@ window_y = [region_y[0], region_y[1]]
 # Mesh parameters:
 h0 = 1             # Coarse mesh grid spacing (approximate)
 h1 = 0.5           # Fine mesh grid spacing along x
-h2 = 0.2           # Fine mesh grid spacing along y
+h2 = 0.3           # Fine mesh grid spacing along y
 layer_thickness = 0.8  # Boundary layer thickness (for both lower and upper walls)
 hh = layer_thickness   # alias
 
