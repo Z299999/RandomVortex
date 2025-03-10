@@ -1,8 +1,8 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, FFMpegWriter
-import time  # Add import for time module
+from matplotlib.colors import LinearSegmentedColormap
+import time  # For timing
 
 # ---------------------------
 # Simulation Parameters
@@ -14,53 +14,46 @@ num_steps = int(T / dt)
 delta = 0.1        # Mollification parameter
 
 # Domain parameters:
-H = 6              # Adjustable domain height
+H = 4              # Adjustable domain height
 region_x = [-6, 6]
 region_y = [0, H]
 window_x = [region_x[0], region_x[1]]
 window_y = [region_y[0], region_y[1]]
 
 # Mesh parameters:
-h0 = 1             # Coarse mesh grid spacing (approximate)
+h0 = 1             # Coarse mesh grid spacing
 h1 = 0.5           # Fine mesh grid spacing along x
-h2 = 0.3           # Fine mesh grid spacing along y
-layer_thickness = 0.8  # Boundary layer thickness (for both lower and upper walls)
+h2 = 0.4           # Fine mesh grid spacing along y
+layer_thickness = 0.8  # Boundary layer thickness for both walls
 hh = layer_thickness   # alias
 
 np.random.seed(42)
 
 # ---------------------------
-# Vorticity, Velocity and Related Functions
+# Vorticity and Velocity Functions
 # ---------------------------
 def velocity(x, y, H=H):
     # Velocity vanishes at y=0 and y=H.
-    return np.array([-0.5 * np.sin(np.pi * y / H), 0])
+    return np.array([-0.5 * np.sin(2 * np.pi * y / H), 0])
 
 def vorticity(x, y, H=H):
-    # vorticity computed as the derivative of u: 0.5*(pi/H)*cos(pi*y/H)
-    return 0.5 * (np.pi / H) * np.cos(np.pi * y / H)
+    # Vorticity computed as (pi/H)*cos(pi*y/H)
+    return (np.pi / H) * np.cos(np.pi * y / H)
 
 # ---------------------------
-# Grid Generation: Lower Fine, Upper Fine (by reflection), and Coarse Interior
+# Grid Generation
 # ---------------------------
 def generate_nonuniform_grid_D():
     """
-    Generates a symmetric nonuniform grid in the band [0,H] with three parts:
-      1. Lower fine grid: y in [0, hh) using step size h2 (endpoint excluded).
-      2. Upper fine grid: obtained by reflecting the lower fine grid via y -> H - y.
-      3. Coarse grid: y in [hh, H - hh] with endpoint=True.
-    
-    In the x-direction, the fine grids use spacing h1 and the coarse grid uses spacing h0.
-    
-    Returns:
-      A dictionary with keys 'coarse', 'fine_lower', and 'fine_upper'. Each value is a tuple (grid, A),
-      where grid is an array of shape (n_x, n_y, 2) and A is the corresponding area array.
+    Generates a symmetric nonuniform grid in [0,H] with three parts:
+      1. Lower fine grid: y in [0, hh) with step size h2 (endpoint excluded).
+      2. Upper fine grid: reflected from lower via y -> H - y.
+      3. Coarse grid: y in [hh, H - hh] (endpoints included).
+    In x-direction, fine grids use spacing h1 and coarse grid uses spacing h0.
+    Returns a dictionary with keys 'coarse', 'fine_lower', and 'fine_upper'.
     """
     x1, x2 = region_x
-    y1, y2 = region_y  # here, y2 is H
-
-    # ---- Lower Fine Grid ----
-    # Generate y-values from 0 (inclusive) to hh (exclusive) with step size h2.
+    # Lower Fine Grid:
     y_vals_lower = np.arange(0, hh, h2)
     num_x_fine = int((x2 - x1) / h1) + 1
     x_fine = np.linspace(x1, x2, num_x_fine)
@@ -68,16 +61,14 @@ def generate_nonuniform_grid_D():
     grid_fine_lower = np.stack((xx_fine_lower, yy_fine_lower), axis=-1)
     A_fine_lower = h1 * h2 * np.ones((num_x_fine, len(y_vals_lower)))
     
-    # ---- Upper Fine Grid ----
-    # Reflect lower fine grid: y -> H - y.
+    # Upper Fine Grid:
     y_vals_upper = H - y_vals_lower
-    y_vals_upper = np.sort(y_vals_upper)  # Ensure ascending order.
+    y_vals_upper = np.sort(y_vals_upper)
     xx_fine_upper, yy_fine_upper = np.meshgrid(x_fine, y_vals_upper, indexing='ij')
     grid_fine_upper = np.stack((xx_fine_upper, yy_fine_upper), axis=-1)
     A_fine_upper = h1 * h2 * np.ones((num_x_fine, len(y_vals_upper)))
     
-    # ---- Coarse Grid ----
-    # Generate y in [hh, H - hh] with endpoints included.
+    # Coarse Grid:
     num_y_coarse = int(round((H - 2 * hh) / h0)) + 1
     num_x_coarse = int((x2 - x1) / h0) + 1
     x_coarse = np.linspace(x1, x2, num_x_coarse)
@@ -86,67 +77,22 @@ def generate_nonuniform_grid_D():
     grid_coarse = np.stack((xx_coarse, yy_coarse), axis=-1)
     A_coarse = h0 * h0 * np.ones((num_x_coarse, num_y_coarse))
     
-    print(f"Lower Fine grid shape: {grid_fine_lower.shape}, number of points: {grid_fine_lower.size//2}")
-    print(f"Upper Fine grid shape: {grid_fine_upper.shape}, number of points: {grid_fine_upper.size//2}")
-    print(f"Coarse grid shape: {grid_coarse.shape}, number of points: {grid_coarse.size//2}")
+    print(f"Lower Fine grid: {grid_fine_lower.shape}")
+    print(f"Upper Fine grid: {grid_fine_upper.shape}")
+    print(f"Coarse grid: {grid_coarse.shape}")
     
-    return {
-        'coarse': (grid_coarse, A_coarse),
-        'fine_lower': (grid_fine_lower, A_fine_lower),
-        'fine_upper': (grid_fine_upper, A_fine_upper)
-    }
+    return {'coarse': (grid_coarse, A_coarse),
+            'fine_lower': (grid_fine_lower, A_fine_lower),
+            'fine_upper': (grid_fine_upper, A_fine_upper)}
 
-# Generate the grids
+# Generate grids
 grids = generate_nonuniform_grid_D()
 grid_coarse, A_coarse = grids['coarse']
 grid_fine_lower, A_fine_lower = grids['fine_lower']
 grid_fine_upper, A_fine_upper = grids['fine_upper']
 
 # ---------------------------
-# Debug Plot: Mesh Grids
-# ---------------------------
-def plot_mesh_grids():
-    plt.figure(figsize=(8, 6))
-    # Plot coarse grid points in blue squares.
-    plt.scatter(grid_coarse[:,:,0], grid_coarse[:,:,1], c='blue', marker='s', label='Coarse')
-    # Plot lower fine grid points in red circles.
-    plt.scatter(grid_fine_lower[:,:,0], grid_fine_lower[:,:,1], c='red', marker='o', label='Fine Lower')
-    # Plot upper fine grid points in red circles.
-    plt.scatter(grid_fine_upper[:,:,0], grid_fine_upper[:,:,1], c='red', marker='o', label='Fine Upper')
-    plt.xlabel("x")
-    plt.ylabel("y")
-    plt.title("Symmetric Mesh Grids in [0,H]")
-    plt.legend()
-    plt.xlim(window_x)
-    plt.ylim(window_y)
-    plt.grid(True)
-    plt.show()
-
-plot_mesh_grids()
-
-# ---------------------------
-# Vortex Initialization
-# ---------------------------
-def initialize_vortices(grid):
-    n_x, n_y, _ = grid.shape
-    w = np.zeros((n_x, n_y))
-    u = np.zeros((n_x, n_y, 2))
-    for i in range(n_x):
-        for j in range(n_y):
-            x, y = grid[i, j]
-            w[i, j] = vorticity(x, y, H)
-            u[i, j] = velocity(x, y, H)
-    return w, u
-
-w0_coarse, u0_coarse = initialize_vortices(grid_coarse)
-w0_fine_lower, u0_fine_lower = initialize_vortices(grid_fine_lower)
-w0_fine_upper, u0_fine_upper = initialize_vortices(grid_fine_upper)
-
-num_vortices = (grid_coarse.size + grid_fine_lower.size + grid_fine_upper.size) // 2
-print("* Number of vortices (total):", num_vortices)
-
-# ---------------------------
-# Mollified Biot-Savart Kernel
+# Mollified Biot-Savart Kernel and Indicator
 # ---------------------------
 def K_delta(x, y, delta=delta):
     x1, x2 = x[0], x[1]
@@ -193,32 +139,53 @@ def indicator_D(point):
 def make_u_func(current_coarse, current_fine_lower, current_fine_upper,
                 w0_coarse, w0_fine_lower, w0_fine_upper,
                 A_coarse, A_fine_lower, A_fine_upper):
+    # Local copies of the constant vorticity arrays
+    w0_coarse_copy = np.copy(w0_coarse)
+    w0_fine_lower_copy = np.copy(w0_fine_lower)
+    w0_fine_upper_copy = np.copy(w0_fine_upper)
+    
     current_coarse_copy = current_coarse.copy()
     current_fine_lower_copy = current_fine_lower.copy()
     current_fine_upper_copy = current_fine_upper.copy()
     
     def u_func(x):
         u_val = np.zeros(2)
+        # Contribution from the coarse grid
         n1, n2 = current_coarse_copy.shape[0], current_coarse_copy.shape[1]
         for i in range(n1):
             for j in range(n2):
                 pos = current_coarse_copy[i, j]
-                contrib = K_delta(pos, x, delta)
-                u_val += indicator_D(pos) * contrib * w0_coarse[i, j] * A_coarse[i, j]
+                u_val += indicator_D(pos) * K_delta(pos, x, delta) * w0_coarse_copy[i, j] * A_coarse[i, j]
+        # Contribution from the fine lower grid
         n1_f, n2_f = current_fine_lower_copy.shape[0], current_fine_lower_copy.shape[1]
         for i in range(n1_f):
             for j in range(n2_f):
                 pos = current_fine_lower_copy[i, j]
-                contrib = K_delta(pos, x, delta)
-                u_val += indicator_D(pos) * contrib * w0_fine_lower[i, j] * A_fine_lower[i, j]
+                u_val += indicator_D(pos) * K_delta(pos, x, delta) * w0_fine_lower_copy[i, j] * A_fine_lower[i, j]
+        # Contribution from the fine upper grid
         n1_fu, n2_fu = current_fine_upper_copy.shape[0], current_fine_upper_copy.shape[1]
         for i in range(n1_fu):
             for j in range(n2_fu):
                 pos = current_fine_upper_copy[i, j]
-                contrib = K_delta(pos, x, delta)
-                u_val += indicator_D(pos) * contrib * w0_fine_upper[i, j] * A_fine_upper[i, j]
+                u_val += indicator_D(pos) * K_delta(pos, x, delta) * w0_fine_upper_copy[i, j] * A_fine_upper[i, j]
         return u_val
     return u_func
+
+# ---------------------------
+# Precompute Constant Vorticity for Each Grid
+# ---------------------------
+def initialize_vorticity(grid):
+    n_x, n_y, _ = grid.shape
+    w = np.zeros((n_x, n_y))
+    for i in range(n_x):
+        for j in range(n_y):
+            x, y = grid[i, j]
+            w[i, j] = vorticity(x, y, H)
+    return w
+
+w0_coarse = initialize_vorticity(grid_coarse)
+w0_fine_lower = initialize_vorticity(grid_fine_lower)
+w0_fine_upper = initialize_vorticity(grid_fine_upper)
 
 # ---------------------------
 # Vortex Trajectory Simulation (Euler-Maruyama)
@@ -230,140 +197,139 @@ def simulate_vortex_trajectories():
     traj_coarse[0] = grid_coarse
     traj_fine_lower[0] = grid_fine_lower
     traj_fine_upper[0] = grid_fine_upper
-    
-    uFuncs = []
-    disp_coarse = np.zeros((num_steps, *grid_coarse.shape))
-    disp_fine_lower = np.zeros((num_steps, *grid_fine_lower.shape))
-    disp_fine_upper = np.zeros((num_steps, *grid_fine_upper.shape))
-    
+
+    uFuncs = []  # List to store velocity functions at each time step
+
     for step in range(num_steps):
         current_coarse = traj_coarse[step]
         current_fine_lower = traj_fine_lower[step]
         current_fine_upper = traj_fine_upper[step]
-        
+
         u_func = make_u_func(current_coarse, current_fine_lower, current_fine_upper,
                              w0_coarse, w0_fine_lower, w0_fine_upper,
                              A_coarse, A_fine_lower, A_fine_upper)
         uFuncs.append(u_func)
-        
+
+        # Update positions using Euler-Maruyama
         n1, n2 = current_coarse.shape[0], current_coarse.shape[1]
         for i in range(n1):
             for j in range(n2):
                 u_val = u_func(current_coarse[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 disp = dt * u_val + dW
-                disp_coarse[step, i, j] = disp
                 traj_coarse[step + 1, i, j] = current_coarse[i, j] + disp
-        
+
         n1_f, n2_f = current_fine_lower.shape[0], current_fine_lower.shape[1]
         for i in range(n1_f):
             for j in range(n2_f):
                 u_val = u_func(current_fine_lower[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 disp = dt * u_val + dW
-                disp_fine_lower[step, i, j] = disp
                 traj_fine_lower[step + 1, i, j] = current_fine_lower[i, j] + disp
-        
+
         n1_fu, n2_fu = current_fine_upper.shape[0], current_fine_upper.shape[1]
         for i in range(n1_fu):
             for j in range(n2_fu):
                 u_val = u_func(current_fine_upper[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 disp = dt * u_val + dW
-                disp_fine_upper[step, i, j] = disp
                 traj_fine_upper[step + 1, i, j] = current_fine_upper[i, j] + disp
-                
-    return (traj_coarse, traj_fine_lower, traj_fine_upper), uFuncs, (disp_coarse, disp_fine_lower, disp_fine_upper)
 
-print("Computing vortex trajectories......")
-start_time = time.time()  # Start timer for trajectory computation
-(trajectories_coarse, trajectories_fine_lower, trajectories_fine_upper), uFuncs, _ = simulate_vortex_trajectories()
-end_time = time.time()  # End timer for trajectory computation
+    return uFuncs
+
+print("Computing vortex trajectories...")
+start_time = time.time()
+uFuncs = simulate_vortex_trajectories()  # List of velocity functions at each time step
+end_time = time.time()
 print(f"Time for trajectory computation: {end_time - start_time:.2f} seconds")
 
 # ---------------------------
-# Boat Simulation (using the velocity functions from vortex simulation)
+# Visualization Utilities for Streamlines
 # ---------------------------
-def generate_boat_grid():
-    grids = generate_nonuniform_grid_D()
-    grid_coarse, _ = grids['coarse']
-    grid_fine_lower, _ = grids['fine_lower']
-    grid_fine_upper, _ = grids['fine_upper']
-    boat_grid = np.concatenate((
-        grid_coarse.reshape(-1, 2),
-        grid_fine_lower.reshape(-1, 2),
-        grid_fine_upper.reshape(-1, 2)
-    ), axis=0)
-    return boat_grid
+# Custom colormap from white (slow) to red (fast)
+my_cmap = LinearSegmentedColormap.from_list("my_cmap", ["#ffffff", "#ff0000"])
 
-def simulate_boats(uFuncs):
-    boat_grid = generate_boat_grid()
-    num_boats = boat_grid.shape[0]
-    boat_positions = np.zeros((num_steps + 1, num_boats, 2))
-    boat_positions[0] = boat_grid
-    boat_displacements = np.zeros((num_steps, num_boats, 2))
-    
-    for step in range(num_steps):
-        u_func = uFuncs[step]
-        for b in range(num_boats):
-            vel = u_func(boat_positions[step, b])
-            boat_displacements[step, b] = dt * vel
-            boat_positions[step + 1, b] = boat_positions[step, b] + dt * vel
-    return boat_positions, boat_displacements
+# Background grid for velocity magnitude computation
+Nx_bg, Ny_bg = 100, 100
+x_bg = np.linspace(window_x[0], window_x[1], Nx_bg)
+y_bg = np.linspace(window_y[0], window_y[1], Ny_bg)
+X_bg, Y_bg = np.meshgrid(x_bg, y_bg)
 
-print("Simulating vortex boats......")
-start_time = time.time()  # Start timer for boat simulation
-boat_positions, boat_displacements = simulate_boats(uFuncs)
-end_time = time.time()  # End timer for boat simulation
-print(f"Time for boat simulation: {end_time - start_time:.2f} seconds")
+def compute_velocity_magnitude(u_func, X, Y):
+    query_points = np.column_stack((X.ravel(), Y.ravel()))
+    U = np.zeros(query_points.shape[0])
+    V = np.zeros(query_points.shape[0])
+    for i, pt in enumerate(query_points):
+        vel = u_func(pt)
+        U[i] = vel[0]
+        V[i] = vel[1]
+    mag = np.sqrt(U**2 + V**2).reshape(X.shape)
+    return mag
 
-# ---------------------------
-# Velocity Field Computation for Visualization
-# ---------------------------
-def compute_velocity_field(u_func, query_points):
-    P = query_points.shape[0]
-    U = np.zeros(P)
-    V = np.zeros(P)
-    for p in range(P):
-        vel = u_func(query_points[p])
-        U[p] = vel[0]
-        V[p] = vel[1]
+# Fix color scale based on initial time step
+initial_u_func = uFuncs[0]
+mag0 = compute_velocity_magnitude(initial_u_func, X_bg, Y_bg)
+vmin = 0
+vmax = np.max(mag0)
+global_max = vmax
+
+def compute_uv_on_grid(u_func, X, Y):
+    vec_u = np.vectorize(lambda x, y: u_func(np.array([x, y]))[0])
+    vec_v = np.vectorize(lambda x, y: u_func(np.array([x, y]))[1])
+    U = vec_u(X, Y)
+    V = vec_v(X, Y)
     return U, V
 
+def plot_streamlines(u_func, t_current):
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.set_xlim(window_x[0], window_x[1])
+    ax.set_ylim(window_y[0], window_y[1])
+    ax.set_aspect('equal')
+    ax.grid(True)
+    ax.set_title(f"Streamlines at t={t_current:.2f}")
+    
+    # Compute background velocity magnitude on the global grid
+    vel_bg = np.array([u_func(np.array([x, y])) for x, y in zip(X_bg.ravel(), Y_bg.ravel())])
+    mag_bg = np.linalg.norm(vel_bg, axis=1).reshape(X_bg.shape)
+    ax.imshow(mag_bg, extent=(window_x[0], window_x[1], window_y[0], window_y[1]),
+              origin='lower', cmap=my_cmap, alpha=0.5, vmin=0, vmax=global_max)
+    
+    # Lower region: dense seeding near lower boundary (y from 0 to layer_thickness)
+    x_lower = np.linspace(region_x[0], region_x[1], 50)
+    y_lower = np.linspace(region_y[0], layer_thickness, 50)
+    U_lower, V_lower = compute_uv_on_grid(u_func, *np.meshgrid(x_lower, y_lower, indexing='ij'))
+    ax.streamplot(x_lower, y_lower, U_lower, V_lower, color='k', linewidth=1)
+    
+    # Upper region: dense seeding near upper boundary (y from H - layer_thickness to H)
+    x_upper = np.linspace(region_x[0], region_x[1], 50)
+    y_upper = np.linspace(H - layer_thickness, H, 50)
+    U_upper, V_upper = compute_uv_on_grid(u_func, *np.meshgrid(x_upper, y_upper, indexing='ij'))
+    ax.streamplot(x_upper, y_upper, U_upper, V_upper, color='k', linewidth=1)
+    
+    # Middle region: intermediate seeding (y from layer_thickness to H - layer_thickness)
+    x_mid = np.linspace(region_x[0], region_x[1], 30)
+    y_mid = np.linspace(layer_thickness, H - layer_thickness, 30)
+    U_mid, V_mid = compute_uv_on_grid(u_func, *np.meshgrid(x_mid, y_mid, indexing='ij'))
+    ax.streamplot(x_mid, y_mid, U_mid, V_mid, color='k', linewidth=1)
+    
+    return fig, ax
+
 # ---------------------------
-# Animation: Combined Velocity Field and Boat Animation
+# Save Streamline Images at Specified Times
 # ---------------------------
-fig, ax = plt.subplots(figsize=(10, 8))
-ax.set_xlim(window_x[0], window_x[1])
-ax.set_ylim(window_y[0], window_y[1])
-ax.set_aspect('equal')
-ax.grid(True)
-ax.set_title("Vortex and Boat Animation (t=0.00)")
+# Times (seconds) at which to save streamline images
+save_times = [0.0, 4.0, 8.0, 12.0, 16.0, 20.0]
+save_frames = [int(t/dt) for t in save_times]
 
-query_grid = generate_boat_grid()
-U, V = compute_velocity_field(uFuncs[0], query_grid)
-vel_quiver = ax.quiver(query_grid[:, 0], query_grid[:, 1], U, V,
-                       color='black', alpha=0.9, pivot='mid',
-                       scale=None, angles='xy', scale_units='xy')
+# Save images into the "belt" subfolder inside the "figure" folder.
+output_folder = os.path.join("figure", "belt")
+os.makedirs(output_folder, exist_ok=True)
 
-boat_scatter = ax.scatter(boat_positions[0, :, 0], boat_positions[0, :, 1],
-                          s=10, color='blue', zorder=3)
-
-def update(frame):
+for frame in save_frames:
     t_current = frame * dt
-    u_func = uFuncs[frame] if frame < len(uFuncs) else uFuncs[-1]
-    U, V = compute_velocity_field(u_func, query_grid)
-    vel_quiver.set_UVC(U, V)
-    boat_scatter.set_offsets(boat_positions[frame])
-    ax.set_title(f"Vortex and Boat Animation (t={t_current:.2f})")
-    return vel_quiver, boat_scatter
-
-anim = FuncAnimation(fig, update, frames=num_steps + 1, interval=40, blit=False)
-
-os.makedirs("animation", exist_ok=True)
-save_path = os.path.join("animation", "belt_domain.mp4")
-writer = FFMpegWriter(fps=25)
-anim.save(save_path, writer=writer)
-print(f"Animation saved at: {save_path}")
-
-plt.close(fig)
+    u_func = uFuncs[frame if frame < len(uFuncs) else -1]
+    fig, ax = plot_streamlines(u_func, t_current)
+    filename = os.path.join(output_folder, f"streamlines_t{t_current:05.2f}.png")
+    plt.savefig(filename, dpi=150)
+    plt.close(fig)
+    print(f"Saved streamline image at t={t_current:.2f} to {filename}")

@@ -46,10 +46,6 @@ def K_delta(x, delta):
     factor = 1 - np.exp(- (r / delta)**2)
     return (1 / (2 * np.pi)) * np.array([-x[1], x[0]]) / (r**2) * factor
 
-# Folder to save static images
-save_folder = os.path.join("figure", "two_vortices")
-os.makedirs(save_folder, exist_ok=True)
-
 # Define a function to run the simulation for a given vortex type
 def run_simulation(vortex_type):
     w0 = np.zeros(num_particles)
@@ -67,7 +63,7 @@ def run_simulation(vortex_type):
     for i in range(num_particles):
         trajectories[0, i, :, :] = grid_points[i]
 
-    # Time-stepping: Update every particle.
+    # Time-stepping: Every particle is updated.
     for step in range(num_steps):
         current_positions = trajectories[step]
         new_positions = np.zeros_like(current_positions)
@@ -84,32 +80,7 @@ def run_simulation(vortex_type):
                 new_positions[i, rho] = current_positions[i, rho] + dt * drift + dW
         trajectories[step + 1] = new_positions
 
-    # Compute global maximum velocity magnitude over all frames,
-    # so that we use the same color bar scale.
-    global_max = 0.0
-    for frame in range(num_steps + 1):
-        U_frame = np.zeros_like(xx)
-        V_frame = np.zeros_like(yy)
-        for i in range(xx.shape[0]):
-            for j in range(xx.shape[1]):
-                pos = np.array([xx[i, j], yy[i, j]])
-                temp = np.zeros(2)
-                for z in active_indices:
-                    vortex_positions = trajectories[frame, z]
-                    inner = np.zeros(2)
-                    for sigma in range(N):
-                        diff = vortex_positions[sigma] - pos
-                        inner += K_delta(diff, delta)
-                    temp += (inner / N) * (w0[z] * h**2)
-                U_frame[i, j] = temp[0]
-                V_frame[i, j] = temp[1]
-        mag_frame = np.sqrt(U_frame**2 + V_frame**2).max()
-        if mag_frame > global_max:
-            global_max = mag_frame
-
-    # ------------------------------
-    # Static Visualization (several time stages)
-    # ------------------------------
+    # Plot velocity field evolution at several time stages
     time_indices = np.linspace(0, num_steps, 5, dtype=int)
     for t_idx in time_indices:
         U = np.zeros_like(xx)
@@ -125,23 +96,99 @@ def run_simulation(vortex_type):
                         diff = vortex_positions[sigma] - pos
                         inner += K_delta(diff, delta)
                     temp += (inner / N) * (w0[z] * h**2)
-                U[i, j] = temp[0]
-                V[i, j] = temp[1]
+                vel = temp
+                U[i, j] = vel[0]
+                V[i, j] = vel[1]
         velocity_magnitude = np.sqrt(U**2 + V**2)
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ctf = ax.contourf(xx, yy, velocity_magnitude, levels=100, cmap='coolwarm',
-                          vmin=0, vmax=global_max, alpha=0.6)
-        cb = fig.colorbar(ctf, ax=ax)
-        cb.set_label("Velocity Magnitude")
-        ax.streamplot(xx, yy, U, V, color='purple')
-        ax.set_title(f'Streamlines at t = {t_idx*dt:.2f} ({vortex_type} vortices)')
-        ax.set_xlabel('x')
-        ax.set_ylabel('y')
-        ax.axis('equal')
-        ax.grid(True)
-        save_path = os.path.join(save_folder, f"streamlines_t{t_idx*dt:.2f}_{vortex_type}.png")
-        plt.savefig(save_path)
-        plt.close(fig)
+        plt.figure(figsize=(6,6))
+        plt.contourf(xx, yy, velocity_magnitude, levels=100, cmap='coolwarm', alpha=0.6)
+        plt.colorbar(label='Velocity Magnitude')
+        plt.streamplot(xx, yy, U, V, color='purple')
+        plt.title(f'Streamlines at t = {t_idx*dt:.2f} ({vortex_type} vortices)')
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.axis('equal')
+        plt.grid(True)
+        plt.show()
+
+    # Plot the final velocity field
+    U_final = np.zeros_like(xx)
+    V_final = np.zeros_like(yy)
+    for i in range(xx.shape[0]):
+        for j in range(xx.shape[1]):
+            pos = np.array([xx[i, j], yy[i, j]])
+            temp = np.zeros(2)
+            for z in active_indices:
+                vortex_positions = trajectories[-1, z]
+                inner = np.zeros(2)
+                for sigma in range(N):
+                    diff = vortex_positions[sigma] - pos
+                    inner += K_delta(diff, delta)
+                temp += (inner / N) * (w0[z] * h**2)
+            vel = temp
+            U_final[i, j] = vel[0]
+            V_final[i, j] = vel[1]
+    velocity_magnitude_final = np.sqrt(U_final**2 + V_final**2)
+    plt.figure(figsize=(6,6))
+    plt.contourf(xx, yy, velocity_magnitude_final, levels=100, cmap='coolwarm', alpha=0.6)
+    plt.colorbar(label='Velocity Magnitude')
+    plt.streamplot(xx, yy, U_final, V_final, color='green')
+    plt.title(f'Final Streamlines ({vortex_type} vortices)')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.axis('equal')
+    plt.grid(True)
+    plt.show()
+
+    # Animation: Velocity Field
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([-1, 1])
+    ax.set_aspect('equal')
+    ax.grid(True)
+    ax.set_title(f"Velocity Field Animation (t=0.00) ({vortex_type} vortices)")
+
+    U, V = np.zeros_like(xx), np.zeros_like(yy)
+    vel_quiver = ax.quiver(xx, yy, U, V, pivot='mid', color='purple')
+    contour = ax.contourf(xx, yy, np.zeros_like(U), levels=100, cmap='coolwarm', alpha=0.6)
+
+    def update(frame):
+        nonlocal contour  # Declare that we mean the outer "contour"
+        t_current = frame * dt
+        U = np.zeros_like(xx)
+        V = np.zeros_like(yy)
+        for i in range(xx.shape[0]):
+            for j in range(xx.shape[1]):
+                pos = np.array([xx[i, j], yy[i, j]])
+                temp = np.zeros(2)
+                for z in active_indices:
+                    vortex_positions = trajectories[frame, z]
+                    inner = np.zeros(2)
+                    for sigma in range(N):
+                        diff = vortex_positions[sigma] - pos
+                        inner += K_delta(diff, delta)
+                    temp += (inner / N) * (w0[z] * h**2)
+                vel = temp
+                U[i, j] = vel[0]
+                V[i, j] = vel[1]
+        velocity_magnitude = np.sqrt(U**2 + V**2)
+        # Remove previous contour collections
+        for c in contour.collections:
+            c.remove()
+        contour = ax.contourf(xx, yy, velocity_magnitude, levels=100, cmap='coolwarm', alpha=0.6)
+        vel_quiver.set_UVC(U, V)
+        ax.set_title(f"Velocity Field Animation (t={t_current:.2f}) ({vortex_type} vortices)")
+        return vel_quiver, contour
+
+    anim = FuncAnimation(fig, update, frames=num_steps + 1, interval=40, blit=False)
+
+    os.makedirs("animation", exist_ok=True)
+    save_path = os.path.join("animation", f"velocity_field_{vortex_type}.mp4")
+    writer = FFMpegWriter(fps=25)
+    anim.save(save_path, writer=writer)
+    print(f"Animation saved at: {save_path}")
+
+    plt.close(fig)
 
 # Run the simulation for both 'same' and 'opposite' vortex types
 run_simulation('same')

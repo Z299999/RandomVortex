@@ -3,7 +3,6 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
-from matplotlib.colors import LinearSegmentedColormap
 
 # ---------------------------
 # Simulation Parameters
@@ -15,15 +14,16 @@ num_steps = int(T / dt)
 delta = 0.1         # Mollification parameter for kernel K_δ
 eps_bl = 0.1        # Boundary layer parameter (ε_bl)
 
-# Flags
+# We set external force flag to False (G=0) so that the force term vanishes.
 VIS = False   # use viscosity term
-EXT = False   # external force turned off
+EXT = False  # external force turned off
 
 # Mesh parameters:
-h0 = 0.8    # Coarse grid spacing (Do)
-h1 = 0.4   # Fine grid spacing in x (Db)
+h0 = 1.5    # Coarse grid spacing (Do)
+h1 = 1.5    # Fine grid spacing in x (Db)
 h2 = 0.2    # Fine grid spacing in y (Db)
-layer_thickness = 0.4 
+
+layer_thickness = 0.3 
 
 region_x = [-6, 6]
 region_y = [0, 6]
@@ -31,6 +31,8 @@ window_x = [region_x[0], region_x[1]]
 window_y = [region_y[0], region_y[1]]
 
 np.random.seed(42)
+
+# Time array (for both the evolution and viscosity term)
 time_array = np.arange(0, T + dt, dt)
 
 # ---------------------------
@@ -48,9 +50,9 @@ def vorticity(x, y):
 def generate_nonuniform_grid_D():
     x1, x2 = region_x
     y1_, y2_ = region_y
-    y3 = layer_thickness
+    y3 = layer_thickness  # dividing line in y
 
-    # Coarse grid (Do)
+    # Coarse grid (Do): y in [y3, y2] with spacing h0
     num_x_coarse = int((x2 - x1) / h0) + 1
     num_y_coarse = int((y2_ - y3) / h0) + 1
     x_coarse = np.linspace(x1, x2, num_x_coarse)
@@ -59,7 +61,7 @@ def generate_nonuniform_grid_D():
     grid_coarse = np.stack((xx_coarse, yy_coarse), axis=-1)
     A_coarse = h0 * h0 * np.ones((num_x_coarse, num_y_coarse))
 
-    # Fine grid (Db)
+    # Fine grid (Db): y in [y1, y3) with spacing h1 (x) and h2 (y)
     num_x_fine = int((x2 - x1) / h1) + 1
     num_y_fine = int((y3 - y1_) / h2) + 1
     x_fine = np.linspace(x1, x2, num_x_fine)
@@ -70,24 +72,12 @@ def generate_nonuniform_grid_D():
 
     print(f"Coarse grid shape: {grid_coarse.shape}, points: {grid_coarse.size//2}")
     print(f"Fine grid shape: {grid_fine.shape}, points: {grid_fine.size//2}")
+
     return {'coarse': (grid_coarse, A_coarse), 'fine': (grid_fine, A_fine)}
 
 grids = generate_nonuniform_grid_D()
 grid_coarse, A_coarse_arr = grids['coarse']
 grid_fine, A_fine_arr = grids['fine']
-
-# ---------------------------
-# Plot Mesh Grid Points
-# ---------------------------
-plt.figure(figsize=(6,6))
-plt.scatter(grid_coarse[:,:,0].ravel(), grid_coarse[:,:,1].ravel(), s=50, marker='o', color='green', label='Coarse Mesh')
-plt.scatter(grid_fine[:,:,0].ravel(), grid_fine[:,:,1].ravel(), s=30, marker='x', color='purple', label='Fine Mesh')
-plt.xlabel('x')
-plt.ylabel('y')
-plt.title('Mesh Grid Points')
-plt.legend()
-plt.grid(True)
-plt.show()
 
 # ---------------------------
 # Initialize Vortices on the Grids
@@ -105,6 +95,7 @@ def initialize_vortices(grid):
 
 w0_coarse, u0_coarse = initialize_vortices(grid_coarse)
 w0_fine, u0_fine = initialize_vortices(grid_fine)
+
 print("* Number of vortices in coarse grid:", grid_coarse.shape[0]*grid_coarse.shape[1])
 print("* Number of vortices in fine grid:", grid_fine.shape[0]*grid_fine.shape[1])
 num_vortices = grid_coarse.shape[0]*grid_coarse.shape[1] + grid_fine.shape[0]*grid_fine.shape[1]
@@ -133,19 +124,27 @@ def reflect(point):
 # ---------------------------
 # Viscosity-related Functions
 # ---------------------------
+# The second viscosity term uses φ'' as given.
 def phi_dd_func(r):
     if r >= 1/3 and r <= 2/3:
         return 324 * (r - 0.5)
     else:
         return 0.0
 
+# Global storage for the Monte Carlo computed theta values on the fine grid.
+# Theta_history_fine[k] will hold the theta values at time t_k (shape same as grid_fine in 2D)
 Theta_history_fine = []
+# At t=0, set theta(x1,0) = initial vorticity at the boundary (here, cos(0)=1)
 Theta_history_fine.append(np.ones(grid_fine.shape[:2]))
 
+# To update theta we need to compute φ_{t}(x1) = ν ∂³u¹/∂x₂³ (evaluated at y=0)
+# We approximate this using a forward finite difference.
 def compute_phi(u_func, x1, h_diff=1e-3):
+    # Evaluate the horizontal velocity component u¹ at (x1, h_diff), (x1, 2h_diff) and (x1, 3h_diff)
     f_h = u_func(np.array([x1, h_diff]))[0]
     f_2h = u_func(np.array([x1, 2 * h_diff]))[0]
     f_3h = u_func(np.array([x1, 3 * h_diff]))[0]
+    # Assume u(x1,0)=0 (by boundary condition) and use a forward difference formula:
     third_deriv = (-f_3h + 3 * f_2h - 3 * f_h) / (h_diff**3)
     return nu * third_deriv
 
@@ -157,6 +156,7 @@ def update_gamma_fine(current_fine, gamma_fine, t_current):
     n1, n2 = current_fine.shape[0], current_fine.shape[1]
     for i in range(n1):
         for j in range(n2):
+            # If the vortex is still in D (i.e. y > 0) gamma remains unchanged; else update to current time.
             if current_fine[i, j][1] > 0:
                 pass  
             else:
@@ -166,11 +166,14 @@ def update_gamma_fine(current_fine, gamma_fine, t_current):
 # ---------------------------
 # Modified u_func Factories
 # ---------------------------
+# The velocity update now has only two terms: the standard vortex-induced term and the viscosity term.
+# In the viscosity term, the original fixed theta_func is replaced by the Monte Carlo computed theta from Theta_history_fine.
 def make_u_func_X(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_fine,
                   w0_coarse, w0_fine, A_coarse, A_fine, delta, 
                   traj_X_fine_history, gamma_fine, time_array, k_index, eps_bl):
     def compute_u_X(x):
         u_val = np.zeros(2)
+        # Coarse grid contribution (Do)
         n1, n2 = current_X_coarse.shape[0], current_X_coarse.shape[1]
         for i in range(n1):
             for j in range(n2):
@@ -179,6 +182,7 @@ def make_u_func_X(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_
                 contrib1 = indicator_D(pos) * K_delta(pos, x, delta)
                 contrib2 = indicator_D(pos_ref) * K_delta(pos_ref, x, delta)
                 u_val += (contrib1 - contrib2) * w0_coarse[i, j] * A_coarse[i, j]
+        # Fine grid contribution (Db)
         n1f, n2f = current_X_fine.shape[0], current_X_fine.shape[1]
         for i in range(n1f):
             for j in range(n2f):
@@ -187,13 +191,16 @@ def make_u_func_X(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_
                 contrib1 = indicator_D(pos) * K_delta(pos, x, delta)
                 contrib2 = indicator_D(pos_ref) * K_delta(pos_ref, x, delta)
                 u_val += (contrib1 - contrib2) * w0_fine[i, j] * A_fine[i, j]
+        # Viscosity contribution (applied only on the fine grid)
         if VIS:
             for i in range(n1f):
                 for j in range(n2f):
                     inner_sum = 0.0
+                    # Sum over all previous time steps l (where the vortex has not yet left D)
                     for l in range(k_index + 1):
                         if time_array[l] > gamma_fine[i, j]:
                             pos_l = traj_X_fine_history[l][i, j]
+                            # Use the stored Monte Carlo computed theta at time t_l.
                             inner_sum += Theta_history_fine[l][i, j] * phi_dd_func(pos_l[1] / eps_bl)
                     u_val += (nu / (eps_bl**2)) * h1 * h2 * dt * K_delta(current_X_fine[i, j], x, delta) * inner_sum
         return u_val
@@ -256,6 +263,7 @@ def make_u_func_Y(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_
 # Vortex Trajectory Simulation and Theta Update
 # ---------------------------
 def simulate_vortex_trajectories_XY():
+    # Allocate arrays to store trajectories (for both X and Y)
     traj_X_coarse = np.zeros((num_steps + 1, grid_coarse.shape[0], grid_coarse.shape[1], 2))
     traj_X_fine   = np.zeros((num_steps + 1, grid_fine.shape[0], grid_fine.shape[1], 2))
     traj_Y_coarse = np.zeros((num_steps + 1, grid_coarse.shape[0], grid_coarse.shape[1], 2))
@@ -276,13 +284,16 @@ def simulate_vortex_trajectories_XY():
     
     for step in range(num_steps):
         t_current = step * dt
+        
         current_X_coarse = traj_X_coarse[step].copy()
         current_X_fine   = traj_X_fine[step].copy()
         current_Y_coarse = traj_Y_coarse[step].copy()
         current_Y_fine   = traj_Y_fine[step].copy()
         
+        # Update gamma for the fine grid using the current positions.
         gamma_fine[:] = update_gamma_fine(current_X_fine, gamma_fine, t_current)
         
+        # Build the u functions at current time step.
         u_func_X = make_u_func_X(current_X_coarse, current_X_fine, current_Y_coarse, current_Y_fine,
                                  w0_coarse, w0_fine, A_coarse_arr, A_fine_arr, delta,
                                  traj_X_fine, gamma_fine, time_array, step, eps_bl)
@@ -292,17 +303,20 @@ def simulate_vortex_trajectories_XY():
         uFuncs_X.append(u_func_X)
         uFuncs_Y.append(u_func_Y)
         
+        # Update coarse grid trajectories (Euler–Maruyama)
         for i in range(n1):
             for j in range(n2):
                 u_val = u_func_X(current_X_coarse[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_X_coarse[step+1, i, j] = current_X_coarse[i, j] + dt * u_val + dW
+        # Update fine grid trajectories for X
         for i in range(n1f):
             for j in range(n2f):
                 u_val = u_func_X(current_X_fine[i, j])
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_X_fine[step+1, i, j] = current_X_fine[i, j] + dt * u_val + dW
         
+        # Similarly update trajectories for Y (if needed)
         for i in range(n1):
             for j in range(n2):
                 u_val = u_func_Y(current_Y_coarse[i, j])
@@ -314,10 +328,17 @@ def simulate_vortex_trajectories_XY():
                 dW = np.sqrt(2 * nu * dt) * np.random.randn(2)
                 traj_Y_fine[step+1, i, j] = current_Y_fine[i, j] + dt * u_val + dW
                 
+        # ---------------------------
+        # Monte Carlo Update of theta for the fine grid
+        # ---------------------------
+        # After computing X_{k+1}, update theta for each fine vortex using:
+        #   theta_{k+1}(x1) = theta_k(x1) - dt * (MC average of φ_{t_k}(x1))
+        # where samples Y_i ~ N(x1, 4ν t_new) and φ_{t_k}(x1) = ν (∂³u¹/∂x₂³)(x1,0).
         t_new = (step + 1) * dt
         theta_new = np.copy(Theta_history_fine[-1])
         MC_samples = 10
         h_diff = 1e-3
+        # We use the current u_func_X (from this step) for the φ computation.
         for i in range(n1f):
             for j in range(n2f):
                 x1 = traj_X_fine[step+1, i, j, 0]
@@ -334,126 +355,95 @@ def simulate_vortex_trajectories_XY():
     total_vortex_time = time.time() - start_time
     print(f"Vortex trajectory simulation time: {total_vortex_time:.2f} seconds")
     
-    return (traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y
+    # ---------------------------
+    # Boat (Passive Tracer) Simulation
+    # ---------------------------
+    start_boat_time = time.time()
+    
+    def generate_boat_grid():
+        # Combine coarse and fine grid points.
+        boat_grid = np.concatenate((grid_coarse.reshape(-1, 2), grid_fine.reshape(-1, 2)), axis=0)
+        return boat_grid
+
+    def simulate_boats(uFuncs):
+        # Simulate passive tracers (boats) using the velocity functions from X.
+        boat_grid = generate_boat_grid()
+        num_boats = boat_grid.shape[0]
+        boat_positions = np.zeros((num_steps+1, num_boats, 2))
+        boat_positions[0] = boat_grid
+        for step in range(num_steps):
+            u_func = uFuncs[step]
+            new_positions = np.zeros_like(boat_grid)
+            for b in range(num_boats):
+                vel = u_func(boat_positions[step, b])
+                new_positions[b] = boat_positions[step, b] + dt * vel
+            boat_positions[step+1] = new_positions
+        return boat_positions
+
+    print("Simulating boat trajectories for X (using uFuncs_X)...")
+    boat_positions_X = simulate_boats(uFuncs_X)
+    
+    total_boat_time = time.time() - start_boat_time
+    print(f"Boat simulation time: {total_boat_time:.2f} seconds")
+    
+    return (traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y, boat_positions_X
 
 print("Simulating vortex trajectories for X and Y ...")
-(traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y = simulate_vortex_trajectories_XY()
+(traj_X_coarse, traj_X_fine), uFuncs_X, (traj_Y_coarse, traj_Y_fine), uFuncs_Y, boat_positions_X = simulate_vortex_trajectories_XY()
 
 # ---------------------------
-# Precompute Background Velocity Magnitude Fields and Velocity Grids
+# Velocity Field Query for Visualization
 # ---------------------------
-num_bg_x = 50
-num_bg_y = 50
-x_bg = np.linspace(region_x[0], region_x[1], num_bg_x)
-y_bg = np.linspace(region_y[0], region_y[1], num_bg_y)
-X_bg, Y_bg = np.meshgrid(x_bg, y_bg)
-
-bg_fields = []    # List for velocity magnitude fields
-vel_fields = []   # List for (U_grid, V_grid) tuples
-global_min = np.inf
-global_max = -np.inf
-for frame in range(num_steps+1):
-    u_func = uFuncs_X[frame] if frame < len(uFuncs_X) else uFuncs_X[-1]
-    U_grid = np.zeros((num_bg_y, num_bg_x))
-    V_grid = np.zeros((num_bg_y, num_bg_x))
-    vel_mag = np.zeros((num_bg_y, num_bg_x))
-    for i in range(num_bg_y):
-        for j in range(num_bg_x):
-            pt = np.array([x_bg[j], y_bg[i]])
-            vel = u_func(pt)
-            U_grid[i, j] = vel[0]
-            V_grid[i, j] = vel[1]
-            vel_mag[i, j] = np.sqrt(vel[0]**2 + vel[1]**2)
-    bg_fields.append(vel_mag)
-    vel_fields.append((U_grid, V_grid))
-    global_min = min(global_min, vel_mag.min())
-    global_max = max(global_max, vel_mag.max())
-print(f"Background velocity magnitude range: min={global_min:.4f}, max={global_max:.4f}")
-
-# ---------------------------
-# Create a Custom Colormap (from blue to red)
-# ---------------------------
-cmap = LinearSegmentedColormap.from_list("blue_red", ["blue", "red"])
-
-# Folder to save static streamline images
-output_folder = os.path.join("figure", "one_wall")
-os.makedirs(output_folder, exist_ok=True)
-
-# ---------------------------
-# Streamline Images at Specified Times
-# ---------------------------
-save_times = [0.0, 4.0, 8.0, 12.0, 16.0, 20.0]
-save_frames = [int(t/dt) for t in save_times]
-
-# Define a vectorized function to compute U, V on a grid
-def compute_uv_on_grid(u_func, X, Y):
-    vec_u = np.vectorize(lambda x, y: u_func(np.array([x, y]))[0])
-    vec_v = np.vectorize(lambda x, y: u_func(np.array([x, y]))[1])
-    U = vec_u(X, Y)
-    V = vec_v(X, Y)
+def compute_velocity_field(u_func, query_points):
+    P = query_points.shape[0]
+    U = np.zeros(P)
+    V = np.zeros(P)
+    for p in range(P):
+        vel = u_func(query_points[p])
+        U[p] = vel[0]
+        V[p] = vel[1]
     return U, V
 
-# Define a function to plot streamlines at a given time t_current
-def plot_streamlines(u_func, t_current):
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.set_xlim(window_x[0], window_x[1])
-    ax.set_ylim(window_y[0], window_y[1])
-    ax.set_aspect('equal')
-    ax.grid(True)
-    ax.set_title(f"Streamlines at t={t_current:.2f}")
-    
-    # Create a background of velocity magnitude
-    # Define points_bg from precomputed X_bg, Y_bg:
-    points_bg = np.column_stack((X_bg.ravel(), Y_bg.ravel()))
-    vel_bg = np.array([u_func(p) for p in points_bg])
-    mag_bg = np.linalg.norm(vel_bg, axis=1).reshape(X_bg.shape)
-    ax.imshow(mag_bg, extent=(window_x[0], window_x[1], window_y[0], window_y[1]),
-              origin='lower', cmap=cmap, alpha=0.5, vmin=0, vmax=global_max)
-    
-    # Plot streamlines with different seeding densities in different regions:
-    # Region A: dense seeding in lower left (fine mesh)
-    xA = np.linspace(region_x[0], layer_thickness, 50)
-    yA = np.linspace(region_y[0], layer_thickness, 50)
-    XA, YA = np.meshgrid(xA, yA)
-    U_A, V_A = compute_uv_on_grid(u_func, XA, YA)
-    ax.streamplot(xA, yA, U_A, V_A, color='k', linewidth=1)
-    
-    # Region B: intermediate density in lower right
-    xB = np.linspace(layer_thickness, region_x[1], 30)
-    yB = np.linspace(region_y[0], layer_thickness, 30)
-    XB, YB = np.meshgrid(xB, yB)
-    U_B, V_B = compute_uv_on_grid(u_func, XB, YB)
-    ax.streamplot(xB, yB, U_B, V_B, color='k', linewidth=1)
-    
-    # Region C: intermediate density in upper left
-    xC = np.linspace(region_x[0], layer_thickness, 30)
-    yC = np.linspace(layer_thickness, region_y[1], 30)
-    XC, YC = np.meshgrid(xC, yC)
-    U_C, V_C = compute_uv_on_grid(u_func, XC, YC)
-    ax.streamplot(xC, yC, U_C, V_C, color='k', linewidth=1)
-    
-    # Coarse region: sparse seeding in upper right
-    xCoarse = np.linspace(layer_thickness, region_x[1], 15)
-    yCoarse = np.linspace(layer_thickness, region_y[1], 15)
-    XCoarse, YCoarse = np.meshgrid(xCoarse, yCoarse)
-    U_Coarse, V_Coarse = compute_uv_on_grid(u_func, XCoarse, YCoarse)
-    ax.streamplot(xCoarse, yCoarse, U_Coarse, V_Coarse, color='k', linewidth=1)
-    
-    # Also, plot the mesh grid points
-    ax.scatter(grid_coarse[:,:,0].ravel(), grid_coarse[:,:,1].ravel(), s=50, marker='o', 
-               color='green', label='Coarse Mesh', zorder=4)
-    ax.scatter(grid_fine[:,:,0].ravel(), grid_fine[:,:,1].ravel(), s=30, marker='x', 
-               color='purple', label='Fine Mesh', zorder=4)
-    ax.legend(loc='upper right')
-    
-    return fig, ax
+def generate_query_grid():
+    return np.concatenate((grid_coarse.reshape(-1, 2), grid_fine.reshape(-1, 2)), axis=0)
 
-# Loop over each specified frame and save streamline image
-for frame in save_frames:
+query_grid = generate_query_grid()
+
+# ---------------------------
+# Animation: Combined Velocity Field and Boat Animation for X
+# ---------------------------
+fig, ax = plt.subplots(figsize=(10, 8))
+ax.set_xlim(window_x[0], window_x[1])
+ax.set_ylim(window_y[0], window_y[1])
+ax.set_aspect('equal')
+ax.grid(True)
+ax.set_title("Vortex and Boat Animation (t=0.00)")
+
+# Adjust quiver parameters: scale=5, width=0.01.
+U, V = compute_velocity_field(uFuncs_X[0], query_grid)
+vel_quiver = ax.quiver(query_grid[:, 0], query_grid[:, 1], U, V,
+                       color='black', alpha=0.9, pivot='mid', scale=5, width=0.01, angles='xy', scale_units='xy')
+boat_scatter = ax.scatter(boat_positions_X[0][:, 0], boat_positions_X[0][:, 1],
+                          s=10, color='blue', zorder=3)
+
+start_anim_time = time.time()
+
+def update(frame):
     t_current = frame * dt
     u_func = uFuncs_X[frame] if frame < len(uFuncs_X) else uFuncs_X[-1]
-    fig, ax = plot_streamlines(u_func, t_current)
-    filename = os.path.join(output_folder, f"streamlines_t{t_current:05.2f}.png")
-    plt.savefig(filename, dpi=150)
-    plt.close(fig)
-    print(f"Saved streamline image at t={t_current:.2f} to {filename}")
+    U, V = compute_velocity_field(u_func, query_grid)
+    vel_quiver.set_UVC(U, V)
+    boat_scatter.set_offsets(boat_positions_X[frame])
+    ax.set_title(f"Vortex and Boat Animation X (t={t_current:.2f})")
+    return vel_quiver, boat_scatter
+
+anim = FuncAnimation(fig, update, frames=num_steps+1, interval=40, blit=False)
+os.makedirs("animation", exist_ok=True)
+save_path = os.path.join("animation", "vortex_XY_vis_ext.mp4")
+writer = FFMpegWriter(fps=25)
+anim.save(save_path, writer=writer)
+total_anim_time = time.time() - start_anim_time
+print(f"Animation computation time: {total_anim_time:.2f} seconds")
+print(f"Animation saved at: {save_path}")
+
+plt.close(fig)
