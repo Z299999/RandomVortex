@@ -15,14 +15,14 @@ delta = 0.1        # Mollification parameter
 
 # Mesh parameters:
 h0 = 0.8    # Coarse grid spacing (both x and y)
-h1 = 0.4  # Fine grid spacing for Region B (x-direction) and Region C (y-direction)
-h2 = 0.2  # Fine grid spacing for Region A (both x and y) and for Region B (y) and Region C (x)
+h1 = 0.4    # Fine grid spacing for Region B (x-direction) and Region C (y-direction)
+h2 = 0.2    # Fine grid spacing for Region A (both x and y) and for Region B (y) and Region C (x)
 layer_thickness = 0.8  # dividing length between fine and coarse regions
 
 region_x = [0, 8]
 region_y = [0, 8]
-window_x = [region_x[0], region_x[1] ]
-window_y = [region_y[0], region_y[1] ]
+window_x = [region_x[0], region_x[1]]
+window_y = [region_y[0], region_y[1]]
 
 np.random.seed(42)
 
@@ -312,6 +312,7 @@ def plot_streamlines(u_func, t_current):
     ax.set_aspect('equal')
     ax.grid(True)
     ax.set_title(f"Streamlines at t={t_current:.2f}")
+    
     # Background: show velocity magnitude using the same colormap and fixed scale
     vel_bg = np.array([u_func(p) for p in points_bg])
     mag_bg = np.linalg.norm(vel_bg, axis=1).reshape(X_bg.shape)
@@ -355,7 +356,7 @@ def plot_streamlines(u_func, t_current):
 save_times = [0.0, 4.0, 8.0, 12.0, 16.0, 20.0]
 save_frames = [int(t/dt) for t in save_times]
 
-# Create folder for streamline images
+# Create folder for streamline images with the new output path
 output_folder = os.path.join("figure", "corner")
 os.makedirs(output_folder, exist_ok=True)
 
@@ -363,7 +364,9 @@ for frame in save_frames:
     t_current = frame * dt
     u_func = uFuncs[frame if frame < len(uFuncs) else -1]
     fig, ax = plot_streamlines(u_func, t_current)
-    filename = os.path.join(output_folder, f"streamlines_t{t_current:05.2f}.png")
-    plt.savefig(filename, dpi=150)
+    # Adjust margins to be tight against the image contents
+    plt.tight_layout()
+    filename = os.path.join(output_folder, f"streamlines_t{t_current:05.2f}.svg")
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved streamline image at t={t_current:.2f} to {filename}")

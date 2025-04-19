@@ -9,7 +9,7 @@ from matplotlib.colors import LinearSegmentedColormap
 # Simulation Parameters
 # ---------------------------
 nu = 0.01           # viscosity
-T = 10              # Final time (seconds)
+T = 20              # Final time (seconds)
 dt = 0.1            # Time step
 num_steps = int(T / dt)
 delta = 0.1         # Mollification parameter for kernel K_δ
@@ -21,9 +21,14 @@ EXT = False   # external force turned off
 
 # Mesh parameters:
 h0 = 0.8    # Coarse grid spacing (Do)
-h1 = 0.4   # Fine grid spacing in x (Db)
+h1 = 0.4    # Fine grid spacing in x (Db)
 h2 = 0.2    # Fine grid spacing in y (Db)
 layer_thickness = 0.4 
+
+# h0 = 0.8    # Coarse grid spacing (Do)
+# h1 = 0.4    # Fine grid spacing in x (Db)
+# h2 = 0.2    # Fine grid spacing in y (Db)
+# layer_thickness = 0.4 
 
 region_x = [-6, 6]
 region_y = [0, 6]
@@ -76,18 +81,16 @@ grids = generate_nonuniform_grid_D()
 grid_coarse, A_coarse_arr = grids['coarse']
 grid_fine, A_fine_arr = grids['fine']
 
-# ---------------------------
-# Plot Mesh Grid Points
-# ---------------------------
-plt.figure(figsize=(6,6))
-plt.scatter(grid_coarse[:,:,0].ravel(), grid_coarse[:,:,1].ravel(), s=50, marker='o', color='green', label='Coarse Mesh')
-plt.scatter(grid_fine[:,:,0].ravel(), grid_fine[:,:,1].ravel(), s=30, marker='x', color='purple', label='Fine Mesh')
-plt.xlabel('x')
-plt.ylabel('y')
-plt.title('Mesh Grid Points')
-plt.legend()
-plt.grid(True)
-plt.show()
+# Optionally, if you previously plotted the mesh grid points for debugging, you can comment this out.
+# plt.figure(figsize=(6,6))
+# plt.scatter(grid_coarse[:,:,0].ravel(), grid_coarse[:,:,1].ravel(), s=50, marker='o', color='green', label='Coarse Mesh')
+# plt.scatter(grid_fine[:,:,0].ravel(), grid_fine[:,:,1].ravel(), s=30, marker='x', color='purple', label='Fine Mesh')
+# plt.xlabel('x')
+# plt.ylabel('y')
+# plt.title('Mesh Grid Points')
+# plt.legend()
+# plt.grid(True)
+# plt.show()
 
 # ---------------------------
 # Initialize Vortices on the Grids
@@ -371,11 +374,11 @@ for frame in range(num_steps+1):
 print(f"Background velocity magnitude range: min={global_min:.4f}, max={global_max:.4f}")
 
 # ---------------------------
-# Create a Custom Colormap (from blue to red)
+# Create a Custom Colormap (from white to red)
 # ---------------------------
-cmap = LinearSegmentedColormap.from_list("blue_red", ["blue", "red"])
+cmap = LinearSegmentedColormap.from_list("white_red", ["white", "red"])
 
-# Folder to save static streamline images
+# Folder to save static streamline images (updated output path)
 output_folder = os.path.join("figure", "one_wall")
 os.makedirs(output_folder, exist_ok=True)
 
@@ -395,65 +398,89 @@ def compute_uv_on_grid(u_func, X, Y):
 
 # Define a function to plot streamlines at a given time t_current
 def plot_streamlines(u_func, t_current):
+    """
+    Draw streamlines of the velocity field at time `t_current`
+    and save the figure.  Only the bottom spine (y = 0) is kept,
+    because there is a single physical wall on that boundary.
+    """
+    # ------------------------------------------------------------------
+    # Figure and axes setup
+    # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(10, 8))
     ax.set_xlim(window_x[0], window_x[1])
     ax.set_ylim(window_y[0], window_y[1])
-    ax.set_aspect('equal')
+    ax.set_aspect("equal")
     ax.grid(True)
-    ax.set_title(f"Streamlines at t={t_current:.2f}")
-    
-    # Create a background of velocity magnitude
-    # Define points_bg from precomputed X_bg, Y_bg:
+    ax.set_title(f"Streamlines at t = {t_current:.2f}")
+
+    # Keep only the bottom spine (the wall); hide the others
+    for side in ("top", "left", "right"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_linewidth(1.5)          # Thickness of wall line
+    ax.spines["bottom"].set_position(("data", 0.0)) # Align exactly at y = 0
+
+    # ------------------------------------------------------------------
+    # Background colour map: velocity magnitude |u|
+    # ------------------------------------------------------------------
     points_bg = np.column_stack((X_bg.ravel(), Y_bg.ravel()))
-    vel_bg = np.array([u_func(p) for p in points_bg])
-    mag_bg = np.linalg.norm(vel_bg, axis=1).reshape(X_bg.shape)
-    ax.imshow(mag_bg, extent=(window_x[0], window_x[1], window_y[0], window_y[1]),
-              origin='lower', cmap=cmap, alpha=0.5, vmin=0, vmax=global_max)
-    
-    # Plot streamlines with different seeding densities in different regions:
-    # Region A: dense seeding in lower left (fine mesh)
+    vel_bg    = np.array([u_func(p) for p in points_bg])
+    mag_bg    = np.linalg.norm(vel_bg, axis=1).reshape(X_bg.shape)
+
+    ax.imshow(
+        mag_bg,
+        extent=(window_x[0], window_x[1], window_y[0], window_y[1]),
+        origin="lower",
+        cmap=cmap,
+        alpha=0.5,
+        vmin=0.0,
+        vmax=global_max,
+    )
+
+    # ------------------------------------------------------------------
+    # Streamlines with four different seeding densities
+    # ------------------------------------------------------------------
+    # Region A: high density near the wall (lower‑left)
     xA = np.linspace(region_x[0], layer_thickness, 50)
     yA = np.linspace(region_y[0], layer_thickness, 50)
     XA, YA = np.meshgrid(xA, yA)
     U_A, V_A = compute_uv_on_grid(u_func, XA, YA)
-    ax.streamplot(xA, yA, U_A, V_A, color='k', linewidth=1)
-    
-    # Region B: intermediate density in lower right
+    ax.streamplot(xA, yA, U_A, V_A, color="k", linewidth=1)
+
+    # Region B: medium density near the wall (lower‑right)
     xB = np.linspace(layer_thickness, region_x[1], 30)
     yB = np.linspace(region_y[0], layer_thickness, 30)
     XB, YB = np.meshgrid(xB, yB)
     U_B, V_B = compute_uv_on_grid(u_func, XB, YB)
-    ax.streamplot(xB, yB, U_B, V_B, color='k', linewidth=1)
-    
-    # Region C: intermediate density in upper left
+    ax.streamplot(xB, yB, U_B, V_B, color="k", linewidth=1)
+
+    # Region C: medium density in the interior (upper‑left)
     xC = np.linspace(region_x[0], layer_thickness, 30)
     yC = np.linspace(layer_thickness, region_y[1], 30)
     XC, YC = np.meshgrid(xC, yC)
     U_C, V_C = compute_uv_on_grid(u_func, XC, YC)
-    ax.streamplot(xC, yC, U_C, V_C, color='k', linewidth=1)
-    
-    # Coarse region: sparse seeding in upper right
+    ax.streamplot(xC, yC, U_C, V_C, color="k", linewidth=1)
+
+    # Coarse region: sparse seeds in the interior (upper‑right)
     xCoarse = np.linspace(layer_thickness, region_x[1], 15)
     yCoarse = np.linspace(layer_thickness, region_y[1], 15)
     XCoarse, YCoarse = np.meshgrid(xCoarse, yCoarse)
     U_Coarse, V_Coarse = compute_uv_on_grid(u_func, XCoarse, YCoarse)
-    ax.streamplot(xCoarse, yCoarse, U_Coarse, V_Coarse, color='k', linewidth=1)
-    
-    # Also, plot the mesh grid points
-    ax.scatter(grid_coarse[:,:,0].ravel(), grid_coarse[:,:,1].ravel(), s=50, marker='o', 
-               color='green', label='Coarse Mesh', zorder=4)
-    ax.scatter(grid_fine[:,:,0].ravel(), grid_fine[:,:,1].ravel(), s=30, marker='x', 
-               color='purple', label='Fine Mesh', zorder=4)
-    ax.legend(loc='upper right')
-    
+    ax.streamplot(xCoarse, yCoarse, U_Coarse, V_Coarse, color="k", linewidth=1)
+
+    # ------------------------------------------------------------------
+    # Final layout adjustments
+    # ------------------------------------------------------------------
+    fig.tight_layout(pad=0)
     return fig, ax
 
-# Loop over each specified frame and save streamline image
+
+# Loop over each specified frame and save streamline image in SVG format
 for frame in save_frames:
     t_current = frame * dt
     u_func = uFuncs_X[frame] if frame < len(uFuncs_X) else uFuncs_X[-1]
     fig, ax = plot_streamlines(u_func, t_current)
-    filename = os.path.join(output_folder, f"streamlines_t{t_current:05.2f}.png")
-    plt.savefig(filename, dpi=150)
+    filename = os.path.join(output_folder, f"streamlines_o_t{t_current:05.2f}.svg")
+    plt.savefig(filename, dpi=150, bbox_inches='tight', pad_inches=0)
     plt.close(fig)
     print(f"Saved streamline image at t={t_current:.2f} to {filename}")
+
